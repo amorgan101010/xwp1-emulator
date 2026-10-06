@@ -1,6 +1,10 @@
-# XW-P1 Emulator 1.0.0
+# XW-P1 Emulator 1.0.0 (withdrawn)
 
-This is the first public source release for Linux. It includes the desktop
+The 1.0 release was withdrawn while user-data save and recall support is
+completed. These notes describe the withdrawn build and are not release
+instructions.
+
+This withdrawn source snapshot for Linux includes the desktop
 instrument and editor, plus CLAP and VST3 plugin source.
 
 The emulator runs the XW-P1 1.11 firmware supplied by the user. On first launch,

@@ -1,4 +1,8 @@
-# XW-P1 Emulator 1.0.0
+# XW-P1 Emulator
+
+**1.0 is withdrawn.** Saving and recalling the instrument's user data is still
+being verified and corrected. This repository is a development snapshot, not
+a finished release.
 
 A Linux desktop and plugin emulator for the Casio XW-P1. It runs the instrument's firmware against a model of its sound hardware. The firmware is not included.
 
