@@ -1,0 +1,40 @@
+# Casio's copyright: never commit firmware or anything derived from it
+firmware/
+out/
+*.zip
+*.bin
+*.ZAL
+*.pdf
+docs/service_manual.txt
+.venv/
+.claude/
+.wolf/
+CLAUDE.md
+ref/
+patches/
+__pycache__/
+rec/
+xwp1/target/
+xwp1-app/target/
+xwp1-plugin/target/
+dist/
+data/
+!data/
+data/*
+!data/reverb/
+!data/reverb/*.f32
+docs/xwp1_midi_implementation.pdf
+docs/xwp1_midi_implementation.txt
+# wave and preset names read from the firmware
+xwp1/panel/data.json
+xwp1/panel/hex.json
+xwp1/panel/drawbar.json
+xwp1/panel/pcm.json
+docs/panel.png
+# made from the firmware by tools/tone_map.py and tools/panel_waves.py (waves.bin: see *.bin)
+xwp1/panel/mem.json
+xwp1/panel/hex_mem.json
+xwp1/panel/draw_mem.json
+xwp1/panel/pcm_mem.json
+xwp1/panel/perf_mem.json
+xwp1/panel/waves.json

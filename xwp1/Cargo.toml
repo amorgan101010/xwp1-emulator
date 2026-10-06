@@ -1,0 +1,29 @@
+[package]
+name = "xwp1"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Casio XW-P1 emulator core: the firmware on an ARM7TDMI interpreter plus a model of the sound source"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+libc = "0.2"
+unicorn-engine = { version = "2.1.5", default-features = false, features = ["arch_arm"] }
+midir = "0.11"
+pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
+rustfft = "6.4.1"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+sha2 = "0.10"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+python = ["dep:pyo3"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = 1

@@ -1,0 +1,23 @@
+[package]
+name = "xwp1-plugin"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Casio XW-P1 emulator as a VST3 / CLAP instrument"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+xwp1 = { path = "../xwp1" }
+libm = "0.2"
+rtrb = "0.3"
+serde = { version = "1", features = ["derive"] }
+miniz_oxide = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = 1

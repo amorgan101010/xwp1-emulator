@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1012">
+<title>XW-P1 Solo Synth</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">
+    <span class="model">XW-P1</span>
+    <span class="sub">Sound editor</span>
+  </div>
+
+  <nav class="engines" aria-label="Sound engine">
+    <button id="soloTab" class="engine-tab on" title="Solo Synth">Solo</button>
+    <button id="hexTab" class="engine-tab" title="Hex Layer">Hex</button>
+    <button id="drawTab" class="engine-tab" title="Drawbar Organ">Organ</button>
+    <button id="pcmTab" class="engine-tab" title="PCM tones">PCM</button>
+    <button id="performTab" class="engine-tab view" title="Performance, sequence and mixer editors">Perform</button>
+    <button id="panelTab" class="engine-tab view" title="The instrument's front panel in every mode">Front Panel</button>
+  </nav>
+
+  <div class="preset" id="preset">
+    <button class="step" id="prevPreset" aria-label="Previous preset">&#9664;</button>
+    <button class="current" id="presetButton" aria-haspopup="dialog">
+      <span class="num" id="presetNum">---</span>
+      <span class="name" id="presetName">connecting</span>
+      <span class="caret">&#9662;</span>
+    </button>
+    <button class="step" id="nextPreset" aria-label="Next preset">&#9654;</button>
+  </div>
+
+  <div class="status">
+    <span class="hint" id="cable" hidden title="The emulator's audio output is not connected to anything on the PC. Cable it in your patchbay, or use Listen here.">output not cabled</span>
+    <label class="vol" title="Master volume of the emulator's output (double-click: 0 dB)"><span id="volText">0 dB</span>
+      <input type="range" id="vol" min="-40" max="24" step="1" value="0" aria-label="Master volume in dB"></label>
+    <div class="meter" title="Output level, left and right">
+      <i id="meterL"></i><i id="meterR"></i>
+    </div>
+    <div class="stat" title="Share of one CPU core the emulation uses"><b id="cpu">--</b><span>cpu</span></div>
+    <button class="pill" id="instances" title="Choose polyphonic or multitimbral operation, voices, and the part shown in the editor">Instances</button>
+    <button class="pill" id="midi" title="Choose the MIDI keyboards and controllers that play this synth">MIDI</button>
+    <button class="pill" id="sound" title="Play the sound in this browser as well">Listen here</button>
+    <button class="pill" id="panic" title="All notes off">Panic</button>
+    <button class="pill on" id="disableAmpVelocity" title="Set this tone's amp touch sensitivity to zero; click again to restore its saved values" aria-pressed="true">Amp vel on</button>
+    <button class="pill on" id="disableFilterVelocity" title="Set this tone's filter touch sensitivities to zero; click again to restore their saved values" aria-pressed="true">Filter vel on</button>
+    <span class="link" id="link" title="Connection to the emulator"></span>
+  </div>
+  <div id="loadbar"><i></i></div>
+</header>
+
+<main id="app">
+  <div id="soloPage">
+  <section class="group macros" id="macros"></section>
+  <section class="top">
+    <div class="group oscs">
+      <h2><span>Oscillators</span><em>click a block to open or close its pitch, filter and amp</em></h2>
+      <div class="strips" id="strips"></div>
+    </div>
+    <div class="group tf" id="tf"></div>
+  </section>
+  <section class="editor" id="editor" hidden></section>
+  </div>
+  <div id="hexPage" hidden>
+    <section class="group hex-layers">
+      <h2><span>Hex Layers</span><em>choose a layer to edit its sound and ranges</em></h2>
+      <div id="hexStrips" class="hex-strips"></div>
+    </section>
+    <section id="hexDetail" class="group hex-detail" hidden></section>
+    <section id="hexLfos" class="hex-lfos"></section>
+  </div>
+  <div id="drawPage" hidden></div>
+  <div id="pcmPage" hidden></div>
+  <section class="bottom">
+    <div id="mods"></div>
+    <div class="group fx" id="fx"></div>
+    <div class="group fx" id="engineFx" hidden></div>
+    <div class="group out" id="out"></div>
+  </section>
+</main>
+
+<footer id="keys">
+  <div class="wheels">
+    <div class="wheel" id="bend" title="Pitch bend"><i></i><span>Bend</span></div>
+    <div class="wheel" id="mod" title="Modulation"><i></i><span>Mod</span></div>
+  </div>
+  <div class="kbd-tools">
+    <button id="octDown" title="Octave down (Z)">&minus;</button>
+    <span id="octLabel">C3</span>
+    <button id="octUp" title="Octave up (X)">+</button>
+    <button id="hold" class="toggle" title="Keep notes held">Hold</button>
+  </div>
+  <div class="keyboard" id="keyboard"></div>
+</footer>
+
+<div id="popover" hidden></div>
+<div id="tip" hidden></div>
+<script src="app.js"></script>
+<script src="macro.js"></script>
+<script src="viz.js"></script>
+<script src="hex.js"></script>
+<script src="drawbar.js"></script>
+<script src="pcm.js"></script>
+<script src="fx.js"></script>
+<script src="perform.js"></script>
+<script src="stepgrid.js"></script>
+<script src="performance.js"></script>
+</body>
+</html>

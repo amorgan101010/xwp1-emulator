@@ -1,0 +1,15 @@
+[package]
+name = "xwp1-app"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Casio XW-P1 emulator as a desktop application: the panel in its own window"
+
+[dependencies]
+libc = "0.2"
+tao = "0.37"
+wry = "0.57"
+xwp1 = { path = "../xwp1" }
+
+[profile.release]
+opt-level = 2
