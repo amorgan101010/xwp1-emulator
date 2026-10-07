@@ -26,7 +26,9 @@ if {crate_version(c) for c in ("xwp1-app", "xwp1-plugin")} != {VERSION}:
 MANIFEST = ROOT / "release-manifest.txt"
 FORBIDDEN = ("firmware/", "out/", "rec/", "hw/", "emu/", "ref/", ".wolf/", ".claude/")
 FORBIDDEN_SUFFIXES = {".zip", ".pdf", ".bin", ".zal"}
-PRIVATE_MARKERS = (b"/home/" + b"aileen/", b"/Users/" + b"aileen/", b"~/" + b"Repositories/")
+# Paths of whoever runs the export must not appear in it (taken from the environment, so no name is written here).
+_USER = Path.home().name.encode()
+PRIVATE_MARKERS = (b"/home/" + _USER + b"/", b"/Users/" + _USER + b"/", b"~/" + b"Repositories/")
 
 
 def digest(path):
