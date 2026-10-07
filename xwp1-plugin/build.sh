@@ -8,7 +8,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
-cargo build --release
+cargo build --release --locked
 so=target/release/libxwp1_plugin.so
 out=target/bundled
 mkdir -p "$out/XW-P1 Emulator.vst3/Contents/x86_64-linux"

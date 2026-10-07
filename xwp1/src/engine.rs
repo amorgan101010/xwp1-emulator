@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
+use crate::card::{self, Card, Store};
 use crate::front::{self, Front};
 use crate::machine::{CpuKind, Machine, OutputStage, USER_MEMORY};
 use crate::poly::{self, Alloc};
@@ -192,6 +193,8 @@ pub enum Cmd {
     WaveMorph(Option<WaveMorph>),
     MacroApply(Arc<macro_lfo::Config>, f64),
     MacroRestore(Arc<macro_lfo::Config>),
+    Card(Option<PathBuf>, bool), // the image of the SD card in the slot (None: no card), and whether it is write-protected
+    User(Arc<Vec<u8>>),  // the user memory as the first instance's firmware left it: this instance's from now on
 }
 
 /// The panel reads the tone out of the instance's memory instead of asking
@@ -203,6 +206,12 @@ pub const PEEK: [u8; 4] = [0xF0, 0x7D, 0x58, 0x50];
 /// F0 7D 58 57, an address (five 7-bit bytes, low first), then two nibbles per byte, F7 from a page: bytes for the
 /// instance's work RAM (`Machine::poke`: the step sequence being edited). Not answered.
 pub const POKE: [u8; 4] = [0xF0, 0x7D, 0x58, 0x57];
+/// F0 7D 58 43 from a page: the files on the SD card (`crate::card`, the image's MUSICDAT folder). Then 0 = list
+/// them, 1 = read one, 2 = store one, 3 = delete one; for 1..3 the file's name follows and a zero byte, for 2 then
+/// its bytes as two nibbles each; F7. Answered to the pages: F0 7D 58 43 0 and a JSON text ("card": whether one is
+/// in the slot, "files": [[name, bytes]...], "error": what went wrong with a 2 or 3), or 1, the name, a zero byte
+/// and the file as nibbles, or 0x7F and the name of a file that could not be read.
+pub const CARD: [u8; 4] = [0xF0, 0x7D, 0x58, 0x43];
 
 fn peek_ranges(msg: &[u8]) -> Vec<(u32, usize)> {
     msg[4..msg.len() - 1].chunks_exact(7).map(|c| {
@@ -357,6 +366,14 @@ pub fn instance(setup: Setup, cmds: mpsc::Receiver<Cmd>, done: mpsc::Sender<Done
             Cmd::Front => (front_asked, front_full) = (true, true),
             Cmd::Poke(addr, data) => { m.poke(addr, &data); }
             Cmd::Dial(clicks) => m.dial(clicks),
+            Cmd::User(user) => { m.load_user(&user); }
+            Cmd::Card(path, read_only) => {
+                let card = path.and_then(|path| {
+                    std::fs::OpenOptions::new().read(true).write(!read_only).open(&path)
+                        .map_err(|e| eprintln!("card: {}: {e}", path.display())).ok()
+                });
+                m.insert_card(card.map(|file| Card::new(Store::File(file), read_only)));
+            }
             Cmd::Control(control, position) => {
                 m.control(control, position);
                 (controls[control], controls_changed) = (position, true);
@@ -646,7 +663,10 @@ pub struct Engine {
     editor_part: usize,       // the multitimbral instance the web editor is attached to
     made: Framer,             // the first instance's MIDI OUT, framed
     made_bank: u8,
+    #[allow(dead_code)]
     user_lock: Option<std::fs::File>, // held while this player is the one that keeps the user memory
+    card: Option<PathBuf>,    // the image of the SD card in the slot (`Engine::card`)
+    user_now: Arc<std::sync::Mutex<Option<Vec<u8>>>>, // the user memory as the first instance last left it
 }
 
 impl Engine {
@@ -684,7 +704,19 @@ impl Engine {
         let (bank, program, cpu, fast) = (a.bank, a.program, a.cpu, a.fast);
         let wave_library = std::fs::read(crate::setup::generated_dir().join("wave_morph.json")).ok()
             .and_then(|bytes| serde_json::from_slice::<WaveLibrary>(&bytes).ok()).map(Arc::new);
-        let template = Box::new(move |poly, history| Setup { image: image.clone(), bank, program, syx: syx.clone(), cpu, fast, poly, glide_off: false, history, keep_user: false, wave_library: wave_library.clone() });
+        // what the first instance's firmware has stored since the start (a WRITE, a Card Load): a voice added
+        // later starts from it, not from what was on disk when the player started
+        let user_now = Arc::new(std::sync::Mutex::new(None::<Vec<u8>>));
+        let stored_now = user_now.clone();
+        let image = move || {
+            let mut image = image.clone();
+            if let Some(user) = &*stored_now.lock().unwrap() {
+                let at = (USER_MEMORY.0 - image::FLASH_BASE) as usize;
+                image[at..at + USER_MEMORY.1].copy_from_slice(user);
+            }
+            image
+        };
+        let template = Box::new(move |poly, history| Setup { image: image(), bank, program, syx: syx.clone(), cpu, fast, poly, glide_off: false, history, keep_user: false, wave_library: wave_library.clone() });
         let instances = poly.instances();
         let mut engine = Engine { voices: Vec::new(), wave_morph: None, macro_lfo: None, macro_notes: vec![None; instances], macro_held: vec![None; instances], macro_last: vec![None; instances], macro_tick: 0, starting: Vec::new(), alloc: None, poly, glide_off: poly.polyphonic() && !poly.glide,
                                   history: a.history.clone(), template,
@@ -692,9 +724,8 @@ impl Engine {
                                   fx: SystemFx { reverb_type: 1, reverb_time: 11, reverb_level: 32, chorus_rate: 5, chorus_level: 0 },
                                   fiq_lost: 0, block: BLOCK, fixed_block: a.block, user_file: a.user.clone().filter(|_| user_lock.is_some()), user_lock,
                                   user_written: None, host_user: a.host_user.is_some(), key_mode: false, each: false, varied: [0; vary::KNOBS], varied_once: false, peeked: Vec::new(), switch_due: 0, local_off: false, local_due: None,
-                                  clock: 0, editor_part: 0, made: Framer::default(), made_bank: 0 };
-        let keep = engine.user_lock.is_some() || engine.host_user;
-        engine.voices = (0..instances).map(|i| engine.spawn_instance(poly.polyphonic(), i == 0 && keep)).collect();
+                                  clock: 0, editor_part: 0, made: Framer::default(), made_bank: 0, card: None, user_now };
+        engine.voices = (0..instances).map(|i| engine.spawn_instance(poly.polyphonic(), i == 0)).collect();
         for (_, done) in &engine.voices {
             done.recv().expect("an instance stopped while starting");
         }
@@ -714,10 +745,80 @@ impl Engine {
         setup.glide_off = poly && !self.poly.glide;
         setup.keep_user = keep_user;
         std::thread::Builder::new().name("voice".into()).spawn(move || instance(setup, cmd_rx, done_tx)).expect("thread");
+        if self.card.is_some() {
+            let _ = cmd_tx.send(Cmd::Card(self.card.clone(), true)); // a voice added later: see `card`
+        }
         if self.macro_lfo.as_ref().is_none_or(|c| c.wave.is_none()) {
             if let Some(morph) = self.wave_morph { let _ = cmd_tx.send(Cmd::WaveMorph(Some(morph))); }
         }
         (cmd_tx, done_rx)
+    }
+
+    /// Put an SD card in the slot: the image file of its sectors (`card::create` makes one), or None to take it
+    /// out. The first instance writes to it; the others get it write-protected, so that Card Load reaches every
+    /// voice and Card Save stores once.
+    pub fn card(&mut self, path: Option<PathBuf>) {
+        self.card = path;
+        for (i, (cmds, _)) in self.voices.iter().chain(self.starting.iter().map(|(link, _)| link)).enumerate() {
+            let _ = cmds.send(Cmd::Card(self.card.clone(), i > 0));
+        }
+    }
+
+    fn card_listing(&self, error: Option<String>) -> Vec<u8> {
+        let files = self.card.as_deref().map(card::list);
+        let json = serde_json::json!({
+            "card": self.card.is_some(),
+            "files": files.as_ref().and_then(|f| f.as_ref().ok()).cloned().unwrap_or_default(),
+            "error": error.or_else(|| files.and_then(|f| f.err()).map(|e| e.to_string())),
+        });
+        let mut msg = CARD.to_vec();
+        msg.push(0);
+        msg.extend(json.to_string().bytes().map(|b| if b < 0x80 { b } else { b'?' }));
+        msg.push(0xF7);
+        msg
+    }
+
+    /// A page's request about the card's files (`CARD`) -> the answer for the pages.
+    fn card_request(&mut self, msg: &[u8]) -> Vec<u8> {
+        let body = &msg[4..msg.len() - 1];
+        let Some((&op, rest)) = body.split_first() else { return self.card_listing(None) };
+        let (name, data) = match rest.iter().position(|&b| b == 0) {
+            Some(end) => (String::from_utf8_lossy(&rest[..end]).into_owned(), &rest[end + 1..]),
+            None => (String::new(), &rest[..0]),
+        };
+        let (Some(path), 1..=3) = (self.card.clone(), op) else { return self.card_listing(None) };
+        let Some(name) = card::file_name(&name) else {
+            return self.card_listing(Some(format!("{name}: not a file name the instrument can read (eight characters, a dot, three)")));
+        };
+        match op {
+            1 => match card::read(&path, &name) {
+                Ok(bytes) => {
+                    let mut out = CARD.to_vec();
+                    out.push(1);
+                    out.extend(name.bytes());
+                    out.push(0);
+                    out.extend(bytes.iter().flat_map(|b| [b >> 4, b & 15]));
+                    out.push(0xF7);
+                    out
+                }
+                Err(_) => {
+                    let mut out = CARD.to_vec();
+                    out.push(0x7F);
+                    out.extend(name.bytes());
+                    out.push(0xF7);
+                    out
+                }
+            },
+            2 => {
+                let bytes: Vec<u8> = data.chunks_exact(2).map(|n| n[0] << 4 | n[1] & 15).collect();
+                let done = card::write(&path, &name, &bytes);
+                self.card_listing(done.err().map(|e| format!("{name}: {e}")))
+            }
+            _ => {
+                let done = card::remove(&path, &name);
+                self.card_listing(done.err().map(|e| format!("{name}: {e}")))
+            }
+        }
     }
 
     pub fn set_wave_morph(&mut self, value: Option<WaveMorph>) {
@@ -1005,6 +1106,13 @@ impl Engine {
                 let _ = self.voices[self.editor_part()].0.send(Cmd::Peek(peek_ranges(&msg)));
                 continue;
             }
+            if msg.starts_with(&CARD) {
+                if msg.last() == Some(&0xF7) {
+                    let answer = self.card_request(&msg);
+                    self.pages.push(answer);
+                }
+                continue;
+            }
             if msg.starts_with(&POKE) {
                 if msg.len() >= 12 && msg.len() % 2 == 0 {
                     let addr = msg[4..9].iter().rev().fold(0u64, |a, &b| a << 7 | b as u64) as u32;
@@ -1214,6 +1322,16 @@ impl Engine {
         for (i, (_, done)) in self.voices.iter().enumerate() {
             let block = done.recv().unwrap_or_else(|_| panic!("instance {i} stopped"));
             if i == 0 {
+                if let Some(data) = &block.user {
+                    *self.user_now.lock().unwrap() = Some(data.clone());
+                    // The buttons of a WRITE went to every instance, and each stored its own edit buffer: with
+                    // voice variation, shifted values, which its next recall would shift once more. They all
+                    // take the first one's memory.
+                    let user = Arc::new(data.clone());
+                    for (cmds, _) in self.voices.iter().skip(1).chain(self.starting.iter().map(|(link, _)| link)) {
+                        let _ = cmds.send(Cmd::User(user.clone()));
+                    }
+                }
                 match (block.user, &self.user_file) {
                     (Some(data), _) if self.host_user => self.user_written = Some(data),
                     (Some(data), Some(file)) => {
@@ -1520,6 +1638,217 @@ mod tests {
         let mut second = Engine::start(&config(Some(written)), poly);
         run(&mut second, 3.0);
         assert!(second.user_written.is_none(), "an instrument started from the kept area wrote to it again");
+    }
+
+    /// Needs the firmware: `cargo test --release --lib a_card -- --ignored` in xwp1/.
+    /// The SD card: the firmware's Card Save writes a file to the image, the pages list, read, store and delete
+    /// files in it, a second voice gets the card write-protected, and a voice added after a WRITE starts from the
+    /// user memory as it is then.
+    #[test]
+    #[ignore]
+    fn a_card_takes_what_card_save_stores() {
+        let config = Config {
+            image: "../firmware/win/XW-P1 Updater/p1-update.bin".into(), syx: None, program: 0, bank: SOLO_SYNTH_BANK, cpu: CpuKind::Native,
+            fast: true, dry: true, reverb: PathBuf::new(), block: None, history: Vec::new(), user: None, host_user: Some(None) };
+        // the second voice with its filters shifted (voice variation): what it holds must not be what gets stored
+        let poly = Poly { voices: 2, multitimbral: false, channels: DEFAULT_CHANNELS, mpe: false, bend: 2.0, glide: false, vary: [0, 127, 0, 0] };
+        let run = |e: &mut Engine, seconds: f64| {
+            let mut pages = Vec::new();
+            for _ in 0..(seconds * SAMPLE_RATE / e.block as f64) as usize {
+                e.run(&[]);
+                pages.append(&mut e.pages);
+            }
+            pages
+        };
+        let press = |e: &mut Engine, code: u8| {
+            for down in [1, 0] {
+                let mut msg = front::BUTTON.to_vec();
+                msg.extend([code, down, 0xF7]);
+                e.play(&msg, false);
+                run(e, if down == 1 { 0.05 } else { 0.8 });
+            }
+        };
+        let ask = |e: &mut Engine, op: u8, name: &str, data: &[u8]| {
+            let mut msg = CARD.to_vec();
+            msg.push(op);
+            if op != 0 {
+                msg.extend(name.bytes());
+                msg.push(0);
+                msg.extend(data.iter().flat_map(|b| [b >> 4, b & 15]));
+            }
+            msg.push(0xF7);
+            e.play(&msg, false);
+            let pages = run(e, 0.05);
+            pages.into_iter().find(|p| p.starts_with(&CARD)).expect("no answer about the card")
+        };
+        let listing = |answer: &[u8]| -> serde_json::Value { serde_json::from_slice(&answer[5..answer.len() - 1]).expect("not JSON") };
+        let image = std::env::temp_dir().join(format!("xwp1-engine-card-{}.img", std::process::id()));
+        let _ = std::fs::remove_file(&image);
+        card::create(&image, 64 << 20).unwrap();
+
+        let mut e = Engine::start(&config, poly);
+        run(&mut e, 2.5);
+        assert_eq!(listing(&ask(&mut e, 0, "", &[]))["card"], false, "a card before one was put in");
+        e.card(Some(image.clone()));
+        for code in [0x0C, 0x1A, 0x33] { press(&mut e, code); } // WRITE, ENTER, YES: the tone (the player starts in Tone mode) to user 0-0
+        run(&mut e, 2.5);
+        let written = e.user_written.take().expect("WRITE was not reported");
+        let late = (e.template)(true, Vec::new()).image;
+        let at = (USER_MEMORY.0 - image::FLASH_BASE) as usize;
+        assert!(late[at..at + USER_MEMORY.1] == written[..], "a voice added now would start from older user memory");
+        // the second voice's user memory is the first one's, not its own shifted tone
+        e.peeked.clear();
+        let ranges: Vec<(u32, usize)> = (0..USER_MEMORY.1 / 4096).map(|i| (USER_MEMORY.0 + (i * 4096) as u32, 4096)).collect();
+        let _ = e.voices[1].0.send(Cmd::Peek(ranges));
+        run(&mut e, 0.5);
+        let mut second = vec![0u8; USER_MEMORY.1];
+        let mut got = 0;
+        for (i, answer) in e.peeked.drain(..) {
+            assert_eq!(i, 1);
+            let addr = answer[4..9].iter().rev().fold(0u64, |a, &b| a << 7 | b as u64) as u32;
+            let bytes: Vec<u8> = answer[9..answer.len() - 1].chunks_exact(2).map(|n| n[0] << 4 | n[1]).collect();
+            second[(addr - USER_MEMORY.0) as usize..][..bytes.len()].copy_from_slice(&bytes);
+            got += bytes.len();
+        }
+        assert_eq!(got, USER_MEMORY.1, "the second voice's user memory was not read");
+        let differ = second.iter().zip(&written).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the second voice stored {differ} bytes of its own (its shifted tone)");
+
+        for code in [0x27, 0x1A, 0x1A, 0x33] { press(&mut e, code); } // MENU, Card Save, the name as it is, YES
+        run(&mut e, 3.0);
+        let files = card::list(&image).unwrap();
+        assert_eq!(files.len(), 1, "Card Save from two voices left {files:?}");
+        let (name, size) = files[0].clone();
+        assert!(name.ends_with(".ZSY") && size > 100, "{name} of {size} bytes");
+
+        let shown = listing(&ask(&mut e, 0, "", &[]));
+        assert_eq!(shown["card"], true);
+        assert_eq!(shown["files"][0][0], name.as_str());
+        let answer = ask(&mut e, 1, &name, &[]);
+        let end = 5 + name.len();
+        assert!(answer[4] == 1 && answer[5..end] == *name.as_bytes() && answer[end] == 0);
+        let data: Vec<u8> = answer[end + 1..answer.len() - 1].chunks_exact(2).map(|n| n[0] << 4 | n[1]).collect();
+        assert_eq!(data, card::read(&image, &name).unwrap());
+        let shown = listing(&ask(&mut e, 2, "copy.zsy", &data));
+        assert!(shown["error"].is_null() && shown["files"].as_array().unwrap().len() == 2, "{shown}");
+        assert_eq!(card::read(&image, "COPY.ZSY").unwrap(), data);
+        let shown = listing(&ask(&mut e, 2, "not a name", &data));
+        assert!(shown["error"].is_string() && shown["files"].as_array().unwrap().len() == 2, "{shown}");
+        let shown = listing(&ask(&mut e, 3, &name, &[]));
+        assert_eq!(shown["files"].as_array().unwrap().len(), 1, "{shown}");
+        assert_eq!(ask(&mut e, 1, &name, &[])[4], 0x7F, "a deleted file was read");
+
+        // Card Load of the copy on an instrument with nothing stored: the same tone in user 0-0
+        drop(e);
+        let mut fresh = Engine::start(&config, Poly { voices: 1, ..poly });
+        run(&mut fresh, 2.5);
+        let formatted = fresh.user_written.take().expect("the formatted area was not reported");
+        fresh.card(Some(image.clone()));
+        for code in [0x27, 0x22, 0x1A, 0x1A, 0x33] { press(&mut fresh, code); } // MENU, down to Card Load, the file, YES
+        run(&mut fresh, 3.0);
+        let loaded = fresh.user_written.take().expect("Card Load stored nothing");
+        assert_ne!(loaded, formatted);
+        assert!(loaded == written, "Card Load stored something else than WRITE had");
+        std::fs::remove_file(&image).unwrap();
+    }
+
+    /// Needs the user-supplied firmware. A Solo tone edited on the native
+    /// slider must reach flash through the firmware's WRITE dialog.
+    #[test]
+    #[ignore]
+    fn a_host_keeps_a_solo_tone() {
+        let config = Config {
+            image: "../firmware/win/XW-P1 Updater/p1-update.bin".into(), syx: None,
+            program: 0, bank: SOLO_SYNTH_BANK, cpu: CpuKind::Native, fast: true,
+            dry: true, reverb: PathBuf::new(), block: None, history: Vec::new(),
+            user: None, host_user: Some(None),
+        };
+        let poly = Poly { voices: 1, multitimbral: false, channels: DEFAULT_CHANNELS,
+            mpe: false, bend: 2.0, glide: false, vary: [0; vary::KNOBS] };
+        let run = |e: &mut Engine, seconds: f64| {
+            for _ in 0..(seconds * SAMPLE_RATE / BLOCK as f64) as usize {
+                e.run(&[]);
+                e.pages.clear();
+            }
+        };
+        let press = |e: &mut Engine, code: u8| {
+            for down in [1, 0] {
+                let mut msg = front::BUTTON.to_vec();
+                msg.extend([code, down, 0xF7]);
+                e.play(&msg, false);
+                run(e, if down == 1 { 0.05 } else { 0.8 });
+            }
+        };
+        let read_amp = |e: &mut Engine| {
+            let mut request = vec![0xF0, 0x44, 0x16, 0x03, 0x7F, 0];
+            request.extend([9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0xF7]);
+            e.play(&request, false);
+            let (mut framer, mut level) = (Framer::default(), None);
+            for _ in 0..(SAMPLE_RATE / BLOCK as f64) as usize {
+                e.run(&[]);
+                for byte in std::mem::take(&mut e.midi) {
+                    framer.push(byte, |msg| {
+                        if msg.len() == 26 && msg[..6] == [0xF0, 0x44, 0x16, 0x03, 0x7F, 1]
+                            && msg[6] == 9 && msg[18] == 42 { level = Some(msg[24]); }
+                    });
+                }
+            }
+            level
+        };
+        let mut e = Engine::start(&config, poly);
+        run(&mut e, 2.5);
+        let formatted = e.user_written.take().expect("format did not complete");
+        press(&mut e, 0x15); // Tone
+        press(&mut e, 0x19); // Solo
+        assert_ne!(e.leds[0] & (1 << 6), 0, "Tone mode did not engage");
+        let mut slider = front::CONTROL.to_vec();
+        slider.extend([0, 37, 0xF7]);
+        e.play(&slider, false);
+        run(&mut e, 0.8);
+        assert_eq!(read_amp(&mut e), Some(37), "slider did not edit the Solo oscillator");
+        for code in [0x0C, 0x1A, 0x33] { press(&mut e, code); }
+        run(&mut e, 2.0);
+        let written = e.user_written.take().expect("Solo WRITE did not reach flash");
+        let changed = formatted.iter().zip(&written).filter(|(a, b)| a != b).count();
+        assert!(changed > 0, "Solo WRITE did not change user memory");
+        drop(e);
+        let mut saved_config = config;
+        saved_config.host_user = Some(Some(written));
+        let mut recalled = Engine::start(&saved_config, poly);
+        run(&mut recalled, 2.0);
+        press(&mut recalled, 0x15); // Tone
+        press(&mut recalled, 0x19); // Solo
+        press(&mut recalled, 0x37); // Preset/User
+        press(&mut recalled, 0x36); // 0
+        assert_ne!(recalled.leds[0] & 1, 0, "user bank did not engage");
+        let mut number_request = vec![0xF0, 0x44, 0x16, 0x03, 0x7F, 0];
+        number_request.extend([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x69, 0, 0, 0, 0, 0, 0xF7]);
+        recalled.play(&number_request, false);
+        let (mut number_framer, mut tone_number) = (Framer::default(), None);
+        for _ in 0..(SAMPLE_RATE / BLOCK as f64) as usize {
+            recalled.run(&[]);
+            for byte in std::mem::take(&mut recalled.midi) {
+                number_framer.push(byte, |msg| {
+                    if msg.len() == 27 && msg[..6] == [0xF0, 0x44, 0x16, 0x03, 0x7F, 1]
+                        && msg[6] == 2 && msg[18] == 0x69 {
+                        tone_number = Some(msg[24] as u16 | (msg[25] as u16) << 7);
+                    }
+                });
+            }
+        }
+        assert_eq!(tone_number, Some(629), "user Solo 0-0 has a different tone number");
+        assert_eq!(read_amp(&mut recalled), Some(37), "stored Solo oscillator level was not recalled");
+        let set_tone = |e: &mut Engine, n: u16| {
+            let mut message = vec![0xF0, 0x44, 0x16, 0x03, 0x7F, 1];
+            message.extend([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x69, 0, 0, 0, 0, 0]);
+            message.extend([(n & 0x7F) as u8, (n >> 7) as u8, 0xF7]);
+            e.play(&message, false);
+            run(e, 0.7);
+        };
+        set_tone(&mut recalled, 0);
+        assert_eq!(read_amp(&mut recalled), Some(0));
+        set_tone(&mut recalled, 629);
+        assert_eq!(read_amp(&mut recalled), Some(37), "direct user Solo selection lost the stored tone");
     }
 
     /// Needs the firmware: `cargo test --release --lib keys_are_polyphonic -- --ignored` in xwp1/.

@@ -334,16 +334,17 @@
     if (n < 100) return D.presets[n] ?? `Solo ${n}`;
     if (n < 150) return window.hexData?.presets[n - 100] ?? `Hex ${n - 100}`;
     if (n < 200) return window.drawData?.presets[n - 150] ?? `Organ ${n - 150}`;
+    if (n >= 629 && n < 729) return `User Solo ${Math.floor((n - 629) / 10)}-${(n - 629) % 10}`;
     const p = window.pcmData;
     return (p && p.tones[n - p.first]) ?? `Tone ${n}`;
   }
   function toneEngine(n) {
     if (n == null) return '';
     // Preset tones are grouped by engine; user tones follow in the same order.
-    if (n < 100 || (n >= 638 && n < 738)) return 'Solo Synth';
-    if (n < 150 || (n >= 738 && n < 788)) return 'Hex Layer';
-    if (n < 200 || (n >= 788 && n < 838)) return 'Drawbar Organ';
-    if (n < 638) return 'PCM';
+    if (n < 100 || (n >= 629 && n < 729)) return 'Solo Synth';
+    if (n < 150) return 'Hex Layer';
+    if (n < 200) return 'Drawbar Organ';
+    if (n < 629) return 'PCM';
     return 'User tone';
   }
 

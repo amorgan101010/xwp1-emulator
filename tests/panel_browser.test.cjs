@@ -126,6 +126,17 @@ test('real browser loads panel and sends keyboard notes over WebSocket', { skip:
     await until(() => received.some(event => event.opcode === 2 && event.data.equals(Buffer.from([0x80, 60, 0]))), 'note off');
     const notes = received.filter(event => event.opcode === 2 && [0x90, 0x80].includes(event.data[0])).map(event => [...event.data]);
     assert.deepEqual(notes.slice(-2), [[0x90, 60, 100], [0x80, 60, 0]]);
+    // a user slot: its bank and number in the header, and the next button goes on to the slot after it
+    assert.equal(await evaluate("store(toneNumber(), 629); showProgram(); document.querySelector('#presetNum').textContent"), 'U:0-0');
+    await evaluate("document.querySelector('#nextPreset').click()");
+    await until(() => received.some(event => event.opcode === 2 && event.data[0] === 0xF0 && event.data[18] === 0x69 && event.data[24] === (630 & 0x7f)), 'next user Solo tone');
+    assert.equal(await evaluate("document.querySelector('#presetNum').textContent"), 'U:0-1');
+    // a user Hex Layer tone belongs to the Hex Layer page
+    assert.equal(await evaluate("store(toneNumber(), 741); showProgram(); activeEngine + ' ' + document.querySelector('#presetNum').textContent"), 'hex U:1-2');
+    await evaluate("document.querySelector('#writeUser').click()");
+    // Save: the dialog, and its question about the card's files (F0 7D 58 43 00 F7)
+    await until(() => received.some(event => event.opcode === 2 && event.data.equals(Buffer.from([0xF0, 0x7D, 0x58, 0x43, 0, 0xF7]))), 'Save button');
+    assert.equal(await evaluate("!!document.querySelector('#popover .store .st-name') && !document.querySelector('#popover').hidden"), true);
   } finally {
     devtools?.close();
     chrome.kill();

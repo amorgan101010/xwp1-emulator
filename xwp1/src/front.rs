@@ -12,7 +12,7 @@
 //! A page asks for the state and for the buttons with messages the firmware
 //! never sees, as it does for memory (`engine::PEEK`).
 
-pub const RAM: usize = 362; // bytes of display memory the firmware addresses; 0..144 is the 72 x 16 dot matrix
+pub const RAM: usize = 362; // bytes of display memory the firmware addresses; 0..288 is the 72 x 32 dot matrix
 pub const LEDS: usize = 84;
 
 /// F0 7D 58 4C F7 from a page: send the state now and after every change.

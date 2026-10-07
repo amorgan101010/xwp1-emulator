@@ -1,27 +1,47 @@
-# XW-P1 Emulator 1.0.0 (withdrawn)
+# XW-P1 Emulator 0.9.0
 
-The 1.0 release was withdrawn while user-data save and recall support is
-completed. These notes describe the withdrawn build and are not release
-instructions.
+A pre-release, for Linux, built from source. It replaces the 1.0.0 source
+snapshot, which was withdrawn: that one could not save, and was harder to
+install than it should have been.
 
-This withdrawn source snapshot for Linux includes the desktop
-instrument and editor, plus CLAP and VST3 plugin source.
+## New since the withdrawn snapshot
 
-The emulator runs the XW-P1 1.11 firmware supplied by the user. On first launch,
-choose the Windows or Mac 1.11 updater ZIP. The app extracts only the firmware
-image, checks its hash, and builds editor data locally. The updater program is
-never run. The release does not contain Casio firmware, updater files, factory
-preset data, or generated wave samples.
+- Saving, the way the XW-P1 does it. WRITE stores tones, Performances, DSPs,
+  step sequences, chains, phrases and arpeggios in the instrument's user
+  memory, which the app keeps between runs; the instrument's Card Save and
+  Card Load work on an SD card image, in the instrument's own file kinds.
+  The editor's **Save** dialog does both without the front panel, and can
+  download and upload the card's files.
+- One command installs: `tools/install_app.sh UPDATER.zip` checks what the
+  build needs before it starts, builds, installs, and imports the firmware.
+  `--plugin` adds the VST3 and CLAP plugin, `--check` only reports what is
+  missing, `--remove` removes app and plugin.
+- A shorter list of requirements, given per distribution in the README. The
+  build no longer needs cmake or libclang (the reference CPU core they were
+  for is now an optional feature for development).
+- `xwp1 --help` and `xwp1 --version`; plain messages instead of crashes for a
+  wrong option or a missing PipeWire tool.
 
-The desktop app has Solo Synth, Hex Layer, Drawbar Organ, and PCM editing,
-MIDI input, polyphonic playback, and measured system reverb responses. Optional
-wave pictures and morphing data can be generated after setup with `xwp1 waves`.
+## What it is
 
-Build and installation instructions are in [README.md](README.md). This source
-release is licensed under GPL-3.0-or-later. The bundled font licenses are in
-`xwp1/panel/fonts/`.
+The emulator runs the XW-P1 1.11 firmware supplied by the user: Solo Synth,
+Hex Layer, Drawbar Organ and PCM tones with an editor for each, polyphonic
+Solo Synth, eight-part multi mode, Performances, the step sequencer, measured
+system reverb responses, and the instrument's front panel. Casio's firmware,
+updater, factory preset data and wave samples are not part of the release.
 
-Supported platform: Linux with PipeWire, ALSA MIDI, GTK, and WebKitGTK. Only
-the tested XW-P1 1.11 firmware image is accepted. The browser panel and Rust
-core have automated tests; plugin host compatibility should be checked in each
-DAW where the plugin is used.
+## Known limits
+
+- Files saved here have not yet been exchanged with a real XW-P1.
+- The app and every plugin instance share one SD card image, with nothing to
+  stop two writing it at once: do Card Save from one at a time. Saving from
+  inside the plugin has not been tested separately from the app.
+- Arpeggios, chains and phrases can be stored but have no editor page yet;
+  they are made on the Front Panel view with the instrument's own menus.
+- The plugin is developed against Bitwig Studio; other hosts are untried.
+- Only the firmware of updater 1.11 is accepted.
+
+Installation is in [README.md](README.md), use in the
+[user guide](docs/USER_GUIDE.md). GPL-3.0-or-later. This is an independent
+project, unaffiliated with and not endorsed or supported by Casio Computer
+Co., Ltd.

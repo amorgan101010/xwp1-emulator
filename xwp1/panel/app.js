@@ -207,6 +207,7 @@ function connect() {
     ws.send('k?');
     sendMidi([0xF0, 0x7D, 0x58, 0x54, poly.part, 0xF7]);
     if (window.frontLinked) window.frontLinked();
+    if (window.storeLinked) window.storeLinked();
     if (window.macros) window.macros.syncLfo();
     readPatch(true);
   };
@@ -1042,9 +1043,40 @@ function buildLfos() {
 let program = null;
 let activeEngine = 'solo';
 window.activeEngine = activeEngine;
+// The tones an editor's list offers: its presets, then the user slots of its kind (store.js): [[tone number, label]...].
+function toneList(engine) {
+  const presets = engine === 'hex' ? window.hexData.presets.map((name, i) => [100 + i, name])
+    : engine === 'draw' ? window.drawData.presets.map((name, i) => [150 + i, name])
+      : engine === 'pcm' ? window.pcmData.tones.map((name, i) => [window.pcmData.first + i, name])
+        : D.presets.map((name, i) => [i, name]);
+  return [...presets, ...(window.userSlots ? window.userSlots.listed(engine) : [])];
+}
+const listedAt = engine => toneList(engine).findIndex(([n]) => n === vals.get(toneNumber().key));
+function chooseListed(engine, i) {
+  const list = toneList(engine), [n] = list[((i % list.length) + list.length) % list.length];
+  if (window.userSlots?.slot(n)) chooseToneNumber(n);
+  else if (engine === 'hex') window.chooseHexPreset(n - 100);
+  else if (engine === 'draw') window.chooseDrawPreset(n - 150);
+  else if (engine === 'pcm') window.choosePcmTone(n);
+  else choosePreset(n);
+}
 function showProgram() {
   const n = vals.get(toneNumber().key);
   program = n != null && n < D.presets.length ? n : null;
+  // a user slot (what WRITE stored, or an empty one): the page of its kind, the slot and its name in the header
+  const user = window.userSlots?.slot(n);
+  if (user) {
+    const engine = user.group.engine;
+    if (engine === 'solo') { if (activeEngine !== 'solo') showSoloEngine(); }
+    else if (activeEngine !== engine || { hex: window.hexProgram, draw: window.drawProgram, pcm: window.pcmProgram }[engine] != null) {
+      const was = activeEngine;
+      ({ hex: window.enterHex, draw: window.enterDraw, pcm: window.enterPcm })[engine](null);
+      if (was !== engine) { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => readPatch(false), 100); }
+    }
+    showUserSlot();
+    updateVelocityButtons();
+    return;
+  }
   // Hex Layer presets are tone numbers 100..149: the instrument may already be on one (program change from outside)
   const hex = n != null && n >= 100 && n < 100 + window.hexData.presets.length ? n - 100 : null;
   const draw = n != null && n >= 150 && n < 200 ? n - 150 : null;
@@ -1076,11 +1108,21 @@ function showProgram() {
   if (n == null && activeEngine !== 'solo') return;
   if (n != null && activeEngine !== 'solo') showSoloEngine();
   if (!document.body.matches('.perform-mode, .panel-mode')) {
-    $('#presetNum').textContent = program == null ? (n == null ? '---' : 'USR') : String(program).padStart(3, '0');
-    $('#presetName').textContent = program == null ? (n == null ? 'reading' : `User tone ${n}`) : D.presets[program];
+    $('#presetNum').textContent = program == null ? '---' : String(program).padStart(3, '0');
+    $('#presetName').textContent = program == null ? 'reading' : D.presets[program];
   }
   updateVelocityButtons();
 }
+window.showProgram = showProgram;
+// The header for a user slot; the pages call it where they would show a preset's name.
+function showUserSlot() {
+  const user = window.userSlots?.slot(vals.get(toneNumber().key));
+  if (!user || document.body.matches('.perform-mode, .panel-mode')) return !!user;
+  $('#presetNum').textContent = user.label;
+  $('#presetName').textContent = user.name;
+  return true;
+}
+window.showUserSlot = showUserSlot;
 function choosePreset(n, onReady = null) {
   showSoloEngine();
   n = (n + D.presets.length) % D.presets.length;
@@ -1105,10 +1147,11 @@ function showSoloEngine() {
   $('#drawTab').classList.remove('on'); $('#pcmTab').classList.remove('on');
   updateVelocityButtons();
 }
-function chooseUserTone(n, onReady = null) {
-  showSoloEngine();
+// A tone by its number (the user slots have no bank and program of their own); the page follows from the number.
+function chooseToneNumber(n, onReady = null) {
   releaseAll();
   discardToneEdits();
+  window.pcmToneTarget = null;
   sendMidi(setMessage(toneNumber(), n));
   for (const ref of refs.values()) forget(ref);
   queue = [];
@@ -1117,13 +1160,15 @@ function chooseUserTone(n, onReady = null) {
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => readPatch(!!onReady, onReady), 450);
 }
-const isSoloToneNumber = n => Number.isInteger(n) && (n >= 0 && n < D.presets.length || n >= 638 && n < 738);
+window.chooseToneNumber = chooseToneNumber;
+const chooseUserTone = chooseToneNumber;
+const isSoloToneNumber = n => Number.isInteger(n) && (n >= 0 && n < D.presets.length || window.userSlots?.slot(n)?.group.id === 'solo');
 window.soloPreset = {
   current: () => {
     const n = vals.get(toneNumber().key);
     return activeEngine === 'solo' && isSoloToneNumber(n) ? n : null;
   },
-  label: n => n >= 0 && n < D.presets.length ? D.presets[n] : n >= 638 && n < 738 ? `User tone ${n}` : 'Unknown Solo tone',
+  label: n => n >= 0 && n < D.presets.length ? D.presets[n] : isSoloToneNumber(n) ? `${window.userSlots.slot(n).label} ${window.userSlots.slot(n).name}` : 'Unknown Solo tone',
   load: n => new Promise((resolve, reject) => {
     n = Number(n);
     if (!isSoloToneNumber(n)) { reject(new Error('The saved Solo tone number is invalid.')); return; }
@@ -1138,27 +1183,19 @@ window.soloPreset = {
 };
 function buildPresets() {
   watch(toneNumber(), showProgram);
-  $('#prevPreset').addEventListener('click', () => document.body.classList.contains('perform-mode')
-    ? window.performanceEditor.stepPreset(-1) : activeEngine === 'hex'
-    ? window.chooseHexPreset((window.hexProgram ?? 0) - 1) : activeEngine === 'draw'
-      ? window.chooseDrawPreset((window.drawProgram ?? 0) - 1) : activeEngine === 'pcm'
-        ? window.choosePcmTone((vals.get(toneNumber().key) ?? window.pcmData.first) - 1) : choosePreset((program ?? 0) - 1));
-  $('#nextPreset').addEventListener('click', () => document.body.classList.contains('perform-mode')
-    ? window.performanceEditor.stepPreset(1) : activeEngine === 'hex'
-    ? window.chooseHexPreset((window.hexProgram ?? -1) + 1) : activeEngine === 'draw'
-      ? window.chooseDrawPreset((window.drawProgram ?? -1) + 1) : activeEngine === 'pcm'
-        ? window.choosePcmTone((vals.get(toneNumber().key) ?? (window.pcmData.first - 1)) + 1) : choosePreset((program ?? -1) + 1));
+  const step = d => document.body.classList.contains('perform-mode') ? window.performanceEditor.stepPreset(d)
+    : chooseListed(activeEngine, Math.max(listedAt(activeEngine), d < 0 ? 0 : -1) + d);
+  $('#prevPreset').addEventListener('click', () => step(-1));
+  $('#nextPreset').addEventListener('click', () => step(1));
   $('#presetButton').addEventListener('click', e => {
     e.stopPropagation();
     if (document.body.classList.contains('perform-mode')) { window.performanceEditor.openPreset(); return; }
-    activeEngine === 'hex'
-      ? chooser($('#preset'), window.hexData.presets, window.hexProgram, window.chooseHexPreset, { what: 'presets', cols: true, width: 720 })
-      : activeEngine === 'draw'
-        ? chooser($('#preset'), window.drawData.presets, window.drawProgram, window.chooseDrawPreset, { what: 'presets', cols: true, width: 720 })
-        : activeEngine === 'pcm'
-          ? chooser($('#preset'), window.pcmData.tones, (vals.get(toneNumber().key) ?? window.pcmData.first) - window.pcmData.first,
-              i => window.choosePcmTone(window.pcmData.first + i), { what: 'PCM tones', cols: true, width: 720, from: window.pcmData.first })
-          : chooser($('#preset'), D.presets, program, choosePreset, { what: 'presets', cols: true, width: 720 });
+    const engine = activeEngine, open = () => chooser($('#preset'), toneList(engine).map(([, name]) => name), listedAt(engine), i => chooseListed(engine, i),
+      { what: { hex: 'Hex Layer tones', draw: 'Drawbar Organ tones', pcm: 'PCM tones' }[engine] ?? 'Solo Synth tones', cols: true, width: 720,
+        from: engine === 'pcm' ? window.pcmData.first : 0 });
+    open();
+    // the user slots' names, should a WRITE or a Card Load on the front panel have changed them
+    window.userSlots?.refresh().then(changed => { if (changed && !popover.hidden && popover.querySelector('.list')) open(); });
   });
   $('#soloTab').addEventListener('click', () => { if (activeEngine !== 'solo') choosePreset(program ?? 0); });
   $('#hexTab').addEventListener('click', () => { if (activeEngine !== 'hex') window.chooseHexPreset(window.hexProgram ?? 0); });

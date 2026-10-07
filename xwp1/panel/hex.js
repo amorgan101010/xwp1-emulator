@@ -160,6 +160,7 @@ function buildHexPage() {
 function showHexPreset() {
   if (document.body.matches('.perform-mode, .panel-mode')) return;
   const n = hexProgram;
+  if (n == null && window.showUserSlot?.()) return;
   $('#presetNum').textContent = n == null ? '---' : String(n).padStart(3, '0');
   $('#presetName').textContent = n == null ? 'Hex Layer preset' : hexData.presets[n];
 }
@@ -187,6 +188,7 @@ function chooseHexPreset(n) {
   sendMidi([0xB0, 0, 97, 0xB0, 0x20, 0, 0xC0, n]);
   for (const ref of refs.values()) if (ref.ct === 8 || ref.ct === 9) forget(ref);
   queue = []; inflight.clear();
+  store(toneNumber(), 100 + n);         // the part's tone number: the program change does not send it back
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => readPatch(false), 450);
   showHexPreset();

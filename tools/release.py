@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Export the reviewed 1.0 source files into a separate public release tree."""
+"""Export the reviewed source files into a separate public release tree."""
 
 import argparse
 import gzip
 import hashlib
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -12,7 +13,16 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = "1.0.0"
+
+
+def crate_version(crate):
+    return re.search(r'^version = "([^"]+)"', (ROOT / crate / "Cargo.toml").read_text(), re.M).group(1)
+
+
+# One number for the three crates: the release is named after it.
+VERSION = crate_version("xwp1")
+if {crate_version(c) for c in ("xwp1-app", "xwp1-plugin")} != {VERSION}:
+    raise SystemExit("xwp1, xwp1-app and xwp1-plugin must have the same version")
 MANIFEST = ROOT / "release-manifest.txt"
 FORBIDDEN = ("firmware/", "out/", "rec/", "hw/", "emu/", "ref/", ".wolf/", ".claude/")
 FORBIDDEN_SUFFIXES = {".zip", ".pdf", ".bin", ".zal"}

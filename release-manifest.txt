@@ -1,4 +1,4 @@
-# Reviewed source files for XW-P1 Emulator 1.0.0. One exact path per line.
+# Reviewed source files of the public XW-P1 Emulator release. One exact path per line.
 .gitignore
 LICENSE
 README.md
@@ -35,6 +35,7 @@ data/reverb/1_12.f32
 data/reverb/1_13.f32
 data/reverb/1_14.f32
 data/reverb/1_15.f32
+docs/USER_GUIDE.md
 release-manifest.txt
 tests/panel_assets.test.cjs
 tests/panel_browser.test.cjs
@@ -84,10 +85,13 @@ xwp1/panel/pcm.js
 xwp1/panel/perform.js
 xwp1/panel/performance.js
 xwp1/panel/stepgrid.js
+xwp1/panel/store.js
 xwp1/panel/style.css
 xwp1/panel/viz.js
 xwp1/src/arm.rs
+xwp1/src/bin/xwp1-lockstep.rs
 xwp1/src/bin/xwp1-rt.rs
+xwp1/src/card.rs
 xwp1/src/engine.rs
 xwp1/src/flash.rs
 xwp1/src/front.rs

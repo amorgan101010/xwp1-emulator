@@ -45,7 +45,7 @@
   const STEP_LED = [8, 9, 10, 11, 12, 13, 14, 72, 41, 42, 43, 44, 45, 46, 73, 74];
   const stepCode = n => n < 8 ? 0x4F - n : 0x47 - (n - 8);
 
-  const COLS = 72, ROWS = 16, PITCH = 6;      // CSS pixels per dot
+  const COLS = 72, ROWS = 32, PITCH = 6;      // CSS pixels per dot; the dot matrix is four lines of text high
   const STRIP = 5;                            // rows of dots given to the digits under the dot matrix
   const ram = new Uint8Array(362);
   let leds = 0n, arpHold = null, page = null, panelPage = null, editor = null, mixer = null, grid = null, canvas = null, lamps = [], shown = false, view = 'perform', got = false;
@@ -180,8 +180,12 @@
 
   function draw() {
     if (!canvas) return;
+    // Smaller dots where the window is narrow or short: the view fits 1280 x 800 and 1360 x 768 without scrolling,
+    // as it did when the display was drawn half as high.
+    const dot = innerWidth <= 900 || innerHeight <= 840 ? 4 : innerHeight <= 940 ? 5 : PITCH;
+    canvas.style.width = `${COLS * dot}px`; canvas.style.height = `${(ROWS + STRIP) * dot}px`;
     // a whole number of device pixels per dot, whatever the zoom, so the dots stay even
-    const pitch = Math.max(2, Math.round(PITCH * (window.devicePixelRatio || 1))), gap = pitch > 3 ? 1 : 0;
+    const pitch = Math.max(2, Math.round(dot * (window.devicePixelRatio || 1))), gap = pitch > 3 ? 1 : 0;
     if (canvas.width !== COLS * pitch) { canvas.width = COLS * pitch; canvas.height = (ROWS + STRIP) * pitch; }
     const g = canvas.getContext('2d'), css = getComputedStyle(canvas);
     const [paper, ink, ghost] = ['--lcd', '--lcd-ink', '--lcd-ghost'].map(n => css.getPropertyValue(n).trim());
@@ -220,6 +224,7 @@
     for (const [n, node] of lamps) node.classList.toggle('lit', n === 40 && inPerformMode() ? arpHold === 1 : (leds >> BigInt(n) & 1n) === 1n);
   }
 
+  window.addEventListener('resize', () => { if (shown) draw(); });
   // answers from the engine (app.js passes them on)
   window.frontPanel = msg => {
     got = true;
@@ -254,6 +259,10 @@
     window.stepGrid.show(shown && view === 'perform' && id === 'seq');
   }
   const TABS = ['soloTab', 'hexTab', 'drawTab', 'pcmTab'];
+  // The Perform view is the instrument in Performance mode: its parts' levels and what WRITE stores are the
+  // Performance's only there (in Tone mode the parts have other levels, and WRITE stores the tone). The tone
+  // editors are the instrument in Tone mode, as it starts. Neither change of mode drops an edit (FINDINGS).
+  let modeChanged = false;
   function show(on, target = 'perform') {
     if (on === shown && (!on || view === target)) return;
     const switching = on && shown;
@@ -274,6 +283,7 @@
       if (!switching) { keysWas = null; touched = false; }
       ask();
       if (view === 'perform') {
+        if (linked && got && !inPerformMode()) { modeChanged = true; touched = true; press(0x0E); }
         tab(which);
         $('#fpNote').textContent = poly.mode !== 'multi' && poly.voices > 1
           ? 'Several voices: zone 1 plays polyphonically; the sequencer and the other zones play the first voice.' : '';
@@ -287,10 +297,12 @@
       window.performanceEditor.show(false);
       window.stepGrid.show(false);
       if (keysWas === false && linked) ws.send('k0');
+      if (modeChanged && linked && inPerformMode()) press(0x15);
+      modeChanged = false;
       if (touched) {
         // a Performance or a tone button may have changed the part's tone, the sliders its values: read it all again
         for (const ref of refs.values()) forget(ref);
-        clearTimeout(reloadTimer); reloadTimer = setTimeout(() => readPatch(true), 300);
+        clearTimeout(reloadTimer); reloadTimer = setTimeout(() => readPatch(true), 600);
       }
     }
   }

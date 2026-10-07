@@ -4,7 +4,9 @@
 //! (`CpuKind::Unicorn`, `xwp1-lockstep`).
 use std::collections::HashMap;
 
+#[cfg(feature = "unicorn")]
 use unicorn_engine::unicorn_const::{Arch, HookType, Mode, Prot};
+#[cfg(feature = "unicorn")]
 use unicorn_engine::{RegisterARM, Unicorn};
 
 use crate::arm::{Arm7, Bus, QUIRKS};
@@ -12,6 +14,7 @@ use crate::flash::{Flash, SECTOR};
 use crate::image::{FLASH_BASE, FLASH_SIZE};
 use crate::soc::{Adc, Keys, Ports, Timers, Uart, Vic, TIMER_BASE, VIC_BASE};
 use crate::reverb::{Reverb, ReverbBank};
+use crate::card::{self, Card, Slot};
 use crate::sound::{Sound, HIRAM_BASE, PORT, SAMPLE_RATE, SLOTS, SRAM_BASE};
 
 pub const CLOCK: f64 = 48_000_000.0;
@@ -27,10 +30,12 @@ const RAM_SIZE: usize = 0x1_0000; // at address 0
 const HIRAM_SIZE: usize = 0x8000;
 // The second flash chip (0x19000000) is also visible at 0x1e000000.
 const FLASH2_ALIAS: (u32, u32, usize) = (0x1E00_0000, 0x1900_0000, 0x0100_0000);
-const MMIO: [(u32, usize); 6] = [(0x1FFD_0000, 0x1_0000), (0x1FFE_0000, 0x8000), (0x1FFF_0000, 0x1_0000),
-                                 (0x2A00_0000, 0x1_0000), (0x5000_0000, 0x1000), (0xFFFF_F000, 0x1000)];
+const MMIO: [(u32, usize); 7] = [(0x1FFD_0000, 0x1_0000), (0x1FFE_0000, 0x8000), (0x1FFF_0000, 0x1_0000),
+                                 (0x2A00_0000, 0x1_0000), (0x2E00_2000, 0x1000), (0x5000_0000, 0x1000),
+                                 (0xFFFF_F000, 0x1000)];
 
 /// Everything the firmware can reach through MMIO or that is stepped per sample.
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))] // some fields are the Unicorn core's alone
 pub struct Devices {
     pub vic: Vic,
     pub timers: Timers,
@@ -39,12 +44,15 @@ pub struct Devices {
     pub ports: Ports,
     pub panel: Uart,
     pub uart1: Uart,
+    pub slot: Slot,
     pub flash: Flash,
     pub sound: Sound,
     image: Vec<u8>,   // pristine flash, what the voices play from
     sram: Box<[u8]>,  // mapped at SRAM_BASE; the streaming voices read it
     hiram: Box<[u8]>, // mapped at HIRAM_BASE; the external input voice reads its ring here
     pub unknown: HashMap<(bool, u32), u64>, // (is write, address) -> count
+    /// When set: every port and unmodelled access as (is write, address, value), for finding out what a device is.
+    pub trace: Option<Vec<(bool, u32, u32)>>,
     budget: i64,      // instructions left in this slice (block stepping)
     modes: Vec<u32>,  // block address -> instruction width, see set_block_stepping
     // The interpreter's memory (Unicorn keeps its own copies of these two).
@@ -65,12 +73,28 @@ impl Devices {
             a if (TIMER_BASE..TIMER_BASE + 0x30).contains(&a) => self.timers.read(addr),
             a if (Keys::BASE..Keys::BASE + 0x10).contains(&a) => self.keys.read(&mut self.vic, addr),
             a if (Adc::BASE..Adc::BASE + 0x10).contains(&a) => self.adc.read(addr, self.ports.mux()),
-            a if (Ports::BASE..Ports::BASE + 0x10).contains(&a) => self.ports.read(addr),
+            a if (Ports::BASE..Ports::BASE + 0x10).contains(&a) => {
+                let value = self.ports.read(addr);
+                if let Some(t) = &mut self.trace { t.push((false, addr, value)); }
+                value
+            }
             a if (self.panel.base..self.panel.base + 0x40).contains(&a) => self.panel.read(addr),
             a if (self.uart1.base..self.uart1.base + 0x40).contains(&a) => self.uart1.read(addr),
+            a if (card::SERIAL..card::SERIAL + card::SERIAL_SIZE).contains(&a) => {
+                let (value, byte) = self.slot.read(addr);
+                if byte {
+                    self.vic.set_line(card::SERIAL_IRQ, true);
+                    if let Some(transfer) = self.slot.waiting.take_if(|t| t.src_fixed) {
+                        self.transfer(transfer);
+                    }
+                }
+                value
+            }
+            a if (card::DMA..card::DMA + card::DMA_SIZE).contains(&a) => self.slot.dma_read(addr),
             a if (PORT..PORT + 0x80).contains(&a) || (SLOTS..SLOTS + 0x8000).contains(&a) => self.sound.read(addr),
             _ => {
                 *self.unknown.entry((false, addr)).or_insert(0) += 1;
+                if let Some(t) = &mut self.trace { t.push((false, addr, 0)); }
                 0
             }
         }
@@ -82,18 +106,56 @@ impl Devices {
             a if (TIMER_BASE..TIMER_BASE + 0x30).contains(&a) => self.timers.write(&mut self.vic, addr, value),
             a if (Keys::BASE..Keys::BASE + 0x10).contains(&a) => self.keys.write(&mut self.vic, addr, value),
             a if (Adc::BASE..Adc::BASE + 0x10).contains(&a) => self.adc.write(addr, value),
-            a if (Ports::BASE..Ports::BASE + 0x10).contains(&a) => self.ports.write(addr, value),
+            a if (Ports::BASE..Ports::BASE + 0x10).contains(&a) => {
+                if let Some(t) = &mut self.trace { t.push((true, addr, value)); }
+                self.ports.write(addr, value)
+            }
             a if (self.panel.base..self.panel.base + 0x40).contains(&a) => self.panel.write(addr, value),
             a if (self.uart1.base..self.uart1.base + 0x40).contains(&a) => self.uart1.write(addr, value),
+            a if (card::SERIAL..card::SERIAL + card::SERIAL_SIZE).contains(&a) => {
+                if self.slot.write(addr, value) {
+                    self.vic.set_line(card::SERIAL_IRQ, true);
+                    if let Some(transfer) = self.slot.waiting.take_if(|t| t.dst_fixed) {
+                        self.transfer(transfer);
+                    }
+                }
+            }
+            a if (card::DMA..card::DMA + card::DMA_SIZE).contains(&a) => {
+                if let Some(transfer) = self.slot.dma_write(addr, value) {
+                    let serial = |a: u32| (card::SERIAL..card::SERIAL + card::SERIAL_SIZE).contains(&a);
+                    if serial(transfer.src) || serial(transfer.dst) {
+                        self.slot.waiting = Some(transfer);
+                    } else {
+                        self.transfer(transfer);
+                    }
+                }
+            }
             a if (PORT..PORT + 0x80).contains(&a) || (SLOTS..SLOTS + 0x8000).contains(&a) => {
                 self.sound.write(addr, value)
             }
-            _ => *self.unknown.entry((true, addr)).or_insert(0) += 1,
+            _ => {
+                *self.unknown.entry((true, addr)).or_insert(0) += 1;
+                if let Some(t) = &mut self.trace { t.push((true, addr, value)); }
+            }
         }
     }
 }
 
 impl Devices {
+    /// A DMA block transfer, done at once: bytes between memory and the serial unit's data registers.
+    fn transfer(&mut self, t: card::Transfer) {
+        for i in 0..t.count {
+            let (src, dst) = (if t.src_fixed { t.src } else { t.src + i }, if t.dst_fixed { t.dst } else { t.dst + i });
+            // Unicorn keeps the low RAM itself: nothing of it is here
+            if self.ram.is_empty() && (src < RAM_SIZE as u32 || dst < RAM_SIZE as u32) {
+                break;
+            }
+            let byte = self.read8(src);
+            self.write8(dst, byte);
+        }
+        self.vic.set_line(card::DMA_IRQ[t.channel], true);
+    }
+
     /// Directly readable memory at `addr`: the region and the offset in it.
     #[inline(always)]
     fn mem(&self, addr: u32) -> Option<(&[u8], usize)> {
@@ -222,6 +284,7 @@ impl Bus for Devices {
     }
 }
 
+#[cfg(feature = "unicorn")]
 type Uc = Unicorn<'static, Devices>;
 
 /// Which CPU core runs the firmware.
@@ -229,12 +292,13 @@ type Uc = Unicorn<'static, Devices>;
 pub enum CpuKind {
     /// The ARM7TDMI interpreter in `arm.rs`, exact instruction budget.
     Native,
-    /// Unicorn, the reference; see `Machine::set_block_stepping`.
+    /// Unicorn, the reference; see `Machine::set_block_stepping`. Only in a build with the `unicorn` feature.
     Unicorn,
 }
 
 enum Cpu {
     Native(Box<(Arm7, Devices)>),
+    #[cfg(feature = "unicorn")]
     Unicorn(Uc),
 }
 
@@ -242,6 +306,7 @@ impl Cpu {
     fn devices(&mut self) -> &mut Devices {
         match self {
             Cpu::Native(n) => &mut n.1,
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => uc.get_data_mut(),
         }
     }
@@ -249,6 +314,7 @@ impl Cpu {
     fn settle(&mut self) {
         match self {
             Cpu::Native(n) => n.1.settle(),
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => settle(uc),
         }
     }
@@ -256,6 +322,7 @@ impl Cpu {
     fn enter(&mut self, fiq: bool) -> bool {
         match self {
             Cpu::Native(n) => n.0.interrupt(fiq),
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => enter(uc, fiq),
         }
     }
@@ -289,6 +356,7 @@ impl OutputStage {
     }
 }
 
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))] // some fields are the Unicorn core's alone
 pub struct Machine {
     cpu: Cpu,
     start: Option<u32>,
@@ -310,6 +378,7 @@ pub struct Machine {
 }
 
 /// Apply the flash model's deferred effects (its hook runs before the write lands).
+#[cfg(feature = "unicorn")]
 fn settle(uc: &mut Unicorn<'_, Devices>) {
     let undo = std::mem::take(&mut uc.get_data_mut().flash.undo);
     for (addr, old) in undo {
@@ -322,11 +391,13 @@ fn settle(uc: &mut Unicorn<'_, Devices>) {
     }
 }
 
+#[cfg(feature = "unicorn")]
 fn reg(uc: &Unicorn<'_, Devices>, r: RegisterARM) -> u32 {
     uc.reg_read(r).unwrap_or(0) as u32
 }
 
 /// Take the FIQ (vector 0x1c) or IRQ (0x18) exception unless it is masked.
+#[cfg(feature = "unicorn")]
 fn enter(uc: &mut Unicorn<'_, Devices>, fiq: bool) -> bool {
     let cpsr = reg(uc, RegisterARM::CPSR);
     let (mask, mode, vector) = if fiq { (0x40, 0xD1, 0x1C) } else { (0x80, 0x92, 0x18) };
@@ -355,7 +426,6 @@ impl Machine {
     }
 
     pub fn with_cpu(image: Vec<u8>, kind: CpuKind) -> Result<Machine, String> {
-        let e = |err| format!("unicorn: {err:?}");
         assert_eq!(image.len(), FLASH_SIZE);
         let mut sram = vec![0u8; SRAM_SIZE].into_boxed_slice();
         let sram_ptr = sram.as_mut_ptr();
@@ -366,7 +436,8 @@ impl Machine {
             vic: Vic::new(), timers: Timers::new(), keys: Keys::new(), adc: Adc::new(), ports: Ports::new(),
             panel: Uart::new(0x2A00_3A00, 16, 17, CLOCK as i64 / 3125),
             uart1: Uart::new(0x2A00_3A40, 19, 20, CLOCK as i64 / 781),
-            flash: Flash::default(), sound: Sound::new(), image, sram, hiram, unknown: HashMap::new(), budget: 0, modes: vec![0; MODE_CACHE],
+            slot: Slot::default(),
+            flash: Flash::default(), sound: Sound::new(), image, sram, hiram, unknown: HashMap::new(), trace: None, budget: 0, modes: vec![0; MODE_CACHE],
             ram: Default::default(), rom: Vec::new(), bus_fault: None,
         };
         let insns_per_sample = (CLOCK / SAMPLE_RATE / CYCLES_PER_INSN).round() as usize;
@@ -383,47 +454,56 @@ impl Machine {
             devices.rom = devices.image.clone();
             return Ok(machine(Cpu::Native(Box::new((Arm7::default(), devices)))));
         }
-        let mut uc = Unicorn::new_with_data(Arch::ARM, Mode::ARM, devices).map_err(e)?;
-        uc.mem_map(FLASH_BASE as u64, FLASH_SIZE as u64, Prot::ALL).map_err(e)?;
-        let image = uc.get_data().image.clone();
-        uc.mem_write(FLASH_BASE as u64, &image).map_err(e)?;
-        uc.mem_map(FLASH2_ALIAS.0 as u64, FLASH2_ALIAS.2 as u64, Prot::ALL).map_err(e)?;
-        uc.mem_write(FLASH2_ALIAS.0 as u64, &alias).map_err(e)?;
-        uc.mem_map(0, RAM_SIZE as u64, Prot::ALL).map_err(e)?;
-        // SAFETY: the buffer is boxed inside the engine's own data, so it
-        // lives as long as the mapping and never moves.
-        unsafe { uc.mem_map_ptr(SRAM_BASE as u64, SRAM_SIZE as u64, Prot::ALL, sram_ptr as _) }.map_err(e)?;
-        unsafe { uc.mem_map_ptr(HIRAM_BASE as u64, HIRAM_SIZE as u64, Prot::ALL, hiram_ptr as _) }.map_err(e)?;
-        for (base, size) in MMIO {
-            uc.mmio_map(base as u64, size as u64,
-                        Some(move |uc: &mut Unicorn<'_, Devices>, off: u64, _size: usize| {
-                            uc.get_data_mut().read(base + off as u32) as u64
-                        }),
-                        Some(move |uc: &mut Unicorn<'_, Devices>, off: u64, _size: usize, value: u64| {
-                            uc.get_data_mut().write(base + off as u32, value as u32)
-                        }))
-              .map_err(e)?;
+        #[cfg(not(feature = "unicorn"))]
+        {
+            let _ = (sram_ptr, hiram_ptr, alias, devices, machine);
+            Err("this build has no Unicorn core (cargo build --features unicorn)".into())
         }
-        uc.add_mem_hook(HookType::MEM_WRITE, FLASH_BASE as u64, FLASH_BASE as u64 + FLASH_SIZE as u64 - 1,
-                        |uc, _kind, addr, size, value| {
-                            settle(uc);
-                            let old = uc.mem_read_as_vec(addr, size).unwrap_or_default();
-                            uc.get_data_mut().flash.write(addr as u32, value as u32, old);
-                            true
-                        })
-          .map_err(e)?;
-        // The hook above runs before the write lands, so what the model wants in the cell is put there when the
-        // firmware next reads the user area (its status poll, at once), the only flash it programs.
-        uc.add_mem_hook(HookType::MEM_READ, USER_MEMORY.0 as u64, USER_MEMORY.0 as u64 + USER_MEMORY.1 as u64 - 1,
-                        |uc, _kind, _addr, _size, _value| {
-                            let flash = &uc.get_data().flash;
-                            if !flash.undo.is_empty() || !flash.fill.is_empty() {
+        #[cfg(feature = "unicorn")]
+        {
+            let e = |err| format!("unicorn: {err:?}");
+            let mut uc = Unicorn::new_with_data(Arch::ARM, Mode::ARM, devices).map_err(e)?;
+            uc.mem_map(FLASH_BASE as u64, FLASH_SIZE as u64, Prot::ALL).map_err(e)?;
+            let image = uc.get_data().image.clone();
+            uc.mem_write(FLASH_BASE as u64, &image).map_err(e)?;
+            uc.mem_map(FLASH2_ALIAS.0 as u64, FLASH2_ALIAS.2 as u64, Prot::ALL).map_err(e)?;
+            uc.mem_write(FLASH2_ALIAS.0 as u64, &alias).map_err(e)?;
+            uc.mem_map(0, RAM_SIZE as u64, Prot::ALL).map_err(e)?;
+            // SAFETY: the buffer is boxed inside the engine's own data, so it
+            // lives as long as the mapping and never moves.
+            unsafe { uc.mem_map_ptr(SRAM_BASE as u64, SRAM_SIZE as u64, Prot::ALL, sram_ptr as _) }.map_err(e)?;
+            unsafe { uc.mem_map_ptr(HIRAM_BASE as u64, HIRAM_SIZE as u64, Prot::ALL, hiram_ptr as _) }.map_err(e)?;
+            for (base, size) in MMIO {
+                uc.mmio_map(base as u64, size as u64,
+                            Some(move |uc: &mut Unicorn<'_, Devices>, off: u64, _size: usize| {
+                                uc.get_data_mut().read(base + off as u32) as u64
+                            }),
+                            Some(move |uc: &mut Unicorn<'_, Devices>, off: u64, _size: usize, value: u64| {
+                                uc.get_data_mut().write(base + off as u32, value as u32)
+                            }))
+                  .map_err(e)?;
+            }
+            uc.add_mem_hook(HookType::MEM_WRITE, FLASH_BASE as u64, FLASH_BASE as u64 + FLASH_SIZE as u64 - 1,
+                            |uc, _kind, addr, size, value| {
                                 settle(uc);
-                            }
-                            true
-                        })
-          .map_err(e)?;
-        Ok(machine(Cpu::Unicorn(uc)))
+                                let old = uc.mem_read_as_vec(addr, size).unwrap_or_default();
+                                uc.get_data_mut().flash.write(addr as u32, value as u32, old);
+                                true
+                            })
+              .map_err(e)?;
+            // The hook above runs before the write lands, so what the model wants in the cell is put there when the
+            // firmware next reads the user area (its status poll, at once), the only flash it programs.
+            uc.add_mem_hook(HookType::MEM_READ, USER_MEMORY.0 as u64, USER_MEMORY.0 as u64 + USER_MEMORY.1 as u64 - 1,
+                            |uc, _kind, _addr, _size, _value| {
+                                let flash = &uc.get_data().flash;
+                                if !flash.undo.is_empty() || !flash.fill.is_empty() {
+                                    settle(uc);
+                                }
+                                true
+                            })
+              .map_err(e)?;
+            Ok(machine(Cpu::Unicorn(uc)))
+        }
     }
 
     pub fn reset(&mut self) {
@@ -432,6 +512,7 @@ impl Machine {
                 n.0.set_cpsr(0xD3);
                 n.0.pc = FLASH_BASE;
             }
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => {
                 let _ = uc.reg_write(RegisterARM::CPSR, 0xD3);
                 self.start = Some(FLASH_BASE);
@@ -442,6 +523,7 @@ impl Machine {
     pub fn cpu_kind(&self) -> CpuKind {
         match self.cpu {
             Cpu::Native(_) => CpuKind::Native,
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(_) => CpuKind::Unicorn,
         }
     }
@@ -450,6 +532,12 @@ impl Machine {
     /// Slices then end on block boundaries, so runs are no longer
     /// instruction-for-instruction the same as emu/machine.py, but the CPU
     /// runs much faster. Unicorn only: the interpreter is always exact.
+    #[cfg(not(feature = "unicorn"))]
+    pub fn set_block_stepping(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn set_block_stepping(&mut self) -> Result<(), String> {
         let Cpu::Unicorn(uc) = &mut self.cpu else { return Ok(()) };
         if !self.block_hook {
@@ -484,6 +572,7 @@ impl Machine {
     pub fn pc(&self) -> u32 {
         match &self.cpu {
             Cpu::Native(n) => n.0.pc,
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => reg(uc, RegisterARM::PC),
         }
     }
@@ -496,6 +585,7 @@ impl Machine {
                 out[..15].copy_from_slice(&n.0.r[..15]);
                 (out[15], out[16]) = (n.0.pc, n.0.cpsr());
             }
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => {
                 use RegisterARM::*;
                 for (o, r) in out.iter_mut().zip([R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, SP, LR, PC, CPSR]) {
@@ -535,6 +625,7 @@ impl Machine {
                 (0..size as u32).map(|i| n.1.mem(addr.wrapping_add(i)).map(|(mem, off)| mem[off])).collect::<Option<_>>()
                                 .unwrap_or_default()
             }
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(uc) => uc.mem_read_as_vec(addr as u64, size).unwrap_or_default(),
         }
     }
@@ -544,6 +635,7 @@ impl Machine {
     pub fn quirks(&self) -> Vec<(&'static str, u64)> {
         match &self.cpu {
             Cpu::Native(n) => QUIRKS.iter().copied().zip(n.0.quirks).collect(),
+            #[cfg(feature = "unicorn")]
             Cpu::Unicorn(_) => Vec::new(),
         }
     }
@@ -575,6 +667,32 @@ impl Machine {
     pub fn control(&mut self, control: usize, position: u8) {
         let (channel, input) = crate::front::control_input(control);
         self.devices().adc.muxed[channel - 5][input] = crate::front::control_reading(control, position);
+    }
+
+    /// Replace the user memory in flash (another instance's, so that all hold the same). -> whether it fitted.
+    pub fn load_user(&mut self, user: &[u8]) -> bool {
+        if user.len() != USER_MEMORY.1 {
+            return false;
+        }
+        match &mut self.cpu {
+            Cpu::Native(n) => {
+                let at = (USER_MEMORY.0 - FLASH_BASE) as usize;
+                n.1.rom[at..at + user.len()].copy_from_slice(user);
+                true
+            }
+            #[cfg(feature = "unicorn")]
+            Cpu::Unicorn(uc) => uc.mem_write(USER_MEMORY.0 as u64, user).is_ok(),
+        }
+    }
+
+    /// Put a card in the slot, or take it out (`None`). -> the card that was in it.
+    pub fn insert_card(&mut self, card: Option<Card>) -> Option<Card> {
+        let d = self.devices();
+        let (port, pin) = card::DETECT;
+        if card.is_some() { d.ports.inputs[port] &= !pin } else { d.ports.inputs[port] |= pin }
+        let (port, pin) = card::PROTECT;
+        if card.as_ref().is_some_and(|c| !c.read_only()) { d.ports.inputs[port] &= !pin } else { d.ports.inputs[port] |= pin }
+        std::mem::replace(&mut d.slot.card, card)
     }
 
     /// Panel button event: 0xb1 = press, 0xb0 = release, then the code.
@@ -616,7 +734,7 @@ impl Machine {
     }
 
     fn step_cpu(&mut self, count: usize) -> bool {
-        let uc = match &mut self.cpu {
+        match &mut self.cpu {
             Cpu::Native(n) => {
                 let (cpu, dev) = &mut **n;
                 cpu.run(dev, count);
@@ -629,23 +747,25 @@ impl Machine {
                 self.fault = Some(format!("{what} at pc {:#010x} lr {:#010x} (r0..r13 {})", cpu.pc, cpu.r[14], regs.join(" ")));
                 return false;
             }
-            Cpu::Unicorn(uc) => uc,
-        };
-        let mut pc = self.start.take().unwrap_or_else(|| reg(uc, RegisterARM::PC));
-        if reg(uc, RegisterARM::CPSR) & 0x20 != 0 {
-            pc |= 1;
+            #[cfg(feature = "unicorn")]
+            Cpu::Unicorn(uc) => {
+                let mut pc = self.start.take().unwrap_or_else(|| reg(uc, RegisterARM::PC));
+                if reg(uc, RegisterARM::CPSR) & 0x20 != 0 {
+                    pc |= 1;
+                }
+                let count = if self.block_hook {
+                    uc.get_data_mut().budget += count as i64;
+                    0
+                } else {
+                    count
+                };
+                if let Err(err) = uc.emu_start(pc as u64, 0xFFFF_FFF0, 0, count) {
+                    self.fault = Some(format!("{err:?} at pc {:#010x} lr {:#010x}", reg(uc, RegisterARM::PC), reg(uc, RegisterARM::LR)));
+                    return false;
+                }
+                true
+            }
         }
-        let count = if self.block_hook {
-            uc.get_data_mut().budget += count as i64;
-            0
-        } else {
-            count
-        };
-        if let Err(err) = uc.emu_start(pc as u64, 0xFFFF_FFF0, 0, count) {
-            self.fault = Some(format!("{err:?} at pc {:#010x} lr {:#010x}", reg(uc, RegisterARM::PC), reg(uc, RegisterARM::LR)));
-            return false;
-        }
-        true
     }
 
     /// Run `samples` audio samples: after each sample's worth of

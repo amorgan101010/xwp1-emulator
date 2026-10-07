@@ -221,13 +221,82 @@ impl Core {
         std::mem::take(&mut self.m.devices().sound.events).iter().map(|e| (e.sample, e.kind, e.command, e.data)).collect()
     }
 
+    /// Put an SD card in the slot: the image file of its sectors (a whole card, as `dd` reads one), or None
+    /// to take it out.
+    #[pyo3(signature = (path, read_only=false))]
+    fn insert_card(&mut self, path: Option<&str>, read_only: bool) -> PyResult<()> {
+        let card = match path {
+            Some(path) => {
+                let file = std::fs::OpenOptions::new().read(true).write(!read_only).open(path)
+                    .map_err(|e| PyRuntimeError::new_err(format!("{path}: {e}")))?;
+                Some(crate::card::Card::new(crate::card::Store::File(file), read_only))
+            }
+            None => None,
+        };
+        self.m.insert_card(card);
+        Ok(())
+    }
+
+    /// Start recording the card's commands; -> those so far as (command, | 0x80 for an application command; argument).
+    fn card_log(&mut self) -> Vec<(u8, u32)> {
+        match &mut self.m.devices().slot.card {
+            Some(card) => card.log.replace(Vec::new()).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// (bytes exchanged over the card's line, blocks written, commands the card model does not know).
+    fn card_stats(&mut self) -> (u64, u64, Vec<u8>) {
+        let slot = &self.m.devices().slot;
+        (slot.exchanged, slot.card.as_ref().map_or(0, |c| c.written), slot.card.as_ref().map_or(Vec::new(), |c| c.unknown.clone()))
+    }
+
+    /// A port's input pins (port 0..3) as the firmware reads them.
+    fn set_port_input(&mut self, port: usize, value: u32) {
+        self.m.devices().ports.inputs[port] = value;
+    }
+
+    /// Start (or stop) recording port and unmodelled accesses; -> those recorded so far as (is_write, address, value).
+    fn trace(&mut self, on: bool) -> Vec<(bool, u32, u32)> {
+        let old = self.m.devices().trace.take().unwrap_or_default();
+        self.m.devices().trace = on.then(Vec::new);
+        old
+    }
+
     /// MMIO accesses nothing models: [(is_write, address, count)].
     fn unknown(&mut self) -> Vec<(bool, u32, u64)> {
         self.m.devices().unknown.iter().map(|(&(w, a), &n)| (w, a, n)).collect()
     }
 }
 
+/// Make a card image (`crate::card::create`).
+#[pyfunction]
+fn card_create(path: &str, bytes: u64) -> PyResult<()> {
+    crate::card::create(std::path::Path::new(path), bytes).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// The files in a card image's MUSICDAT folder: [(name, bytes)].
+#[pyfunction]
+fn card_list(path: &str) -> PyResult<Vec<(String, u64)>> {
+    crate::card::list(std::path::Path::new(path)).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+fn card_read<'py>(py: Python<'py>, path: &str, name: &str) -> PyResult<Bound<'py, PyBytes>> {
+    let data = crate::card::read(std::path::Path::new(path), name).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &data))
+}
+
+#[pyfunction]
+fn card_write(path: &str, name: &str, data: Vec<u8>) -> PyResult<()> {
+    crate::card::write(std::path::Path::new(path), name, &data).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
 #[pymodule]
 fn xwp1(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(card_create, m)?)?;
+    m.add_function(wrap_pyfunction!(card_list, m)?)?;
+    m.add_function(wrap_pyfunction!(card_read, m)?)?;
+    m.add_function(wrap_pyfunction!(card_write, m)?)?;
     m.add_class::<Core>()
 }

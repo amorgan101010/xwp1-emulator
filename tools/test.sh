@@ -3,10 +3,10 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 
-cargo test --manifest-path "$root/xwp1/Cargo.toml" --lib
-cargo test --manifest-path "$root/xwp1/Cargo.toml" --test panel_integration
-cargo test --manifest-path "$root/xwp1-plugin/Cargo.toml" --lib
-cargo test --manifest-path "$root/xwp1-app/Cargo.toml"
+cargo test --locked --manifest-path "$root/xwp1/Cargo.toml" --lib
+cargo test --locked --manifest-path "$root/xwp1/Cargo.toml" --test panel_integration
+cargo test --locked --manifest-path "$root/xwp1-plugin/Cargo.toml" --lib
+cargo test --locked --manifest-path "$root/xwp1-app/Cargo.toml"
 
 for file in "$root"/xwp1/panel/*.js; do
     node --check "$file"

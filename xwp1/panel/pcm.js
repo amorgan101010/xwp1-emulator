@@ -58,8 +58,9 @@ function buildPcmPage() {
     const index = valid ? value - pcmData.first : -1;
     pcmProgram = valid ? value : null;
     window.pcmProgram = pcmProgram;
-    title.querySelector('.pcm-number').textContent = valid ? String(value).padStart(3, '0') : '---';
-    title.querySelector('h1').textContent = valid ? pcmData.tones[index] : 'Reading PCM tone…';
+    const user = valid ? null : window.userSlots?.slot(value);      // a user slot: its bank and number, its name
+    title.querySelector('.pcm-number').textContent = valid ? String(value).padStart(3, '0') : user ? user.label : '---';
+    title.querySelector('h1').textContent = valid ? pcmData.tones[index] : user ? user.name : 'Reading PCM tone…';
   });
   const groups = el('div', { class: 'pcm-groups' },
     pcmGroup('Envelope', 'ampl', offsetEnvelope({
@@ -85,6 +86,7 @@ function enterPcm(number) {
   if (!document.body.matches('.perform-mode, .panel-mode')) {
     $('#presetNum').textContent = pcmProgram == null ? '---' : String(pcmProgram).padStart(3, '0');
     $('#presetName').textContent = pcmProgram == null ? 'Reading PCM tone…' : pcmData.tones[pcmProgram - pcmData.first];
+    if (pcmProgram == null) window.showUserSlot?.();
   }
   activeEngine = 'pcm'; window.activeEngine = 'pcm';
   document.body.classList.add('pcm-mode');

@@ -128,6 +128,7 @@ function buildDrawPage() {
 
 function showDrawPreset() {
   if (document.body.matches('.perform-mode, .panel-mode')) return;
+  if (drawProgram == null && window.showUserSlot?.()) return;
   $('#presetNum').textContent = drawProgram == null ? '---' : String(drawProgram).padStart(3, '0');
   $('#presetName').textContent = drawProgram == null ? 'Drawbar Organ tone' : drawData.presets[drawProgram];
 }
@@ -153,6 +154,7 @@ function chooseDrawPreset(n) {
   sendMidi([0xB0, 0, 96, 0xB0, 0x20, 0, 0xC0, n]);
   for (const ref of refs.values()) if (ref.ct === 7 || ref.ct === 8 || ref.ct === 9) forget(ref);
   queue = []; inflight.clear();
+  store(toneNumber(), 150 + n);         // the part's tone number: the program change does not send it back
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => readPatch(false), 450);
   showDrawPreset();

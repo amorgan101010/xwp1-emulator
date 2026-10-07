@@ -1,7 +1,8 @@
 [package]
 name = "xwp1"
-version = "1.0.0"
+version = "0.9.0"
 edition = "2021"
+rust-version = "1.89"
 license = "GPL-3.0-or-later"
 description = "Casio XW-P1 emulator core: the firmware on an ARM7TDMI interpreter plus a model of the sound source"
 
@@ -10,7 +11,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 libc = "0.2"
-unicorn-engine = { version = "2.1.5", default-features = false, features = ["arch_arm"] }
+unicorn-engine = { version = "2.1.5", default-features = false, features = ["arch_arm"], optional = true }
 midir = "0.11"
 pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 rustfft = "6.4.1"
@@ -19,9 +20,16 @@ sha2 = "0.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+fatfs = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 
 [features]
 python = ["dep:pyo3"]
+# The reference CPU the interpreter is checked against (`--cpu unicorn`, `xwp1-lockstep`). Needs cmake and libclang.
+unicorn = ["dep:unicorn-engine"]
+
+[[bin]]
+name = "xwp1-lockstep"
+required-features = ["unicorn"]
 
 [profile.release]
 opt-level = 3

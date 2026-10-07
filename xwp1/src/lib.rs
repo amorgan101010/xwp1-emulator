@@ -4,6 +4,7 @@
 //! time. Evidence for everything modelled here is in
 //! docs/FINDINGS.md; `emu/*.py` is the reference this was ported from.
 pub mod arm;
+pub mod card;
 pub mod engine;
 pub mod flash;
 pub mod front;

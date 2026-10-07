@@ -169,6 +169,9 @@ impl Timers {
 /// transmit data at +0xc. One interrupt per received byte and one per
 /// transmitted byte. UART0 (0x2a003a00, IRQ 16/17) is the link to the panel
 /// sub-CPU, which also carries MIDI.
+/// How many byte times a received byte waits for the one before it to be read (about 2.5 s on the panel link).
+const RX_PATIENCE: i64 = 8192;
+
 pub struct Uart {
     pub base: u32,
     rx_irq: u32,
@@ -229,6 +232,15 @@ impl Uart {
         if !self.rx_queue.is_empty() {
             self.rx_left -= clocks;
             if self.rx_left <= 0 {
+                // The byte before is still unread (the firmware is busy with interrupts off: it programs flash
+                // that way). Replacing it lost the release of a button during a WRITE, after which the firmware
+                // took no button at all (FINDINGS, "Panel link"); whether the real receiver buffers is not known,
+                // but the instrument is not known to do that, so the next byte waits. Only after a long wait is
+                // it given up.
+                if self.rx_unread && self.rx_left > -self.byte_clocks * RX_PATIENCE {
+                    vic.set_line(self.rx_irq, true);
+                    return;
+                }
                 self.rx_lost += self.rx_unread as u64;
                 self.rx_unread = true;
                 self.rx_data = self.rx_queue.pop_front().unwrap() as u32;

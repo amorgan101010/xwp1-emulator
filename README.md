@@ -1,48 +1,67 @@
 # XW-P1 Emulator
 
-**1.0 is withdrawn.** Saving and recalling the instrument's user data is still
-being verified and corrected. This repository is a development snapshot, not
-a finished release.
+An emulator of the Casio XW-P1 synthesizer for Linux: a desktop app with a full sound editor, and a VST3 / CLAP plugin. It runs the instrument's own firmware against a model of its sound hardware, so the Solo Synth, Hex Layer, Drawbar Organ and PCM tones, the Performances, step sequencer, arpeggios and phrases are the instrument's, not imitations.
 
-A Linux desktop and plugin emulator for the Casio XW-P1. It runs the instrument's firmware against a model of its sound hardware. The firmware is not included.
+**The firmware is not included.** You supply Casio's XW-P1 1.11 updater (a free download from Casio's support site) and the emulator reads the firmware image out of it.
 
-## Install the desktop app
+This is an independent project, unaffiliated with and not endorsed or supported by Casio Computer Co., Ltd.
 
-From this source tree, run `tools/install_app.sh`. This builds the Rust player and app and installs them in `~/.local/share/xwp1-app`, with launcher links in `~/.local/bin`. The application menu entry and `xwp1://` editor handler use the installed copies, so the source tree can be moved afterward.
+## Status: 0.9, a pre-release
 
-Open **XW-P1 Emulator** and choose the XW-P1 1.11 Windows or Mac updater ZIP that you downloaded from Casio. An extracted `p1-update.bin` also works. The app reads only the image inside the ZIP; it never runs the updater or writes to a physical instrument. Setup can also be run from a terminal:
+- Works: all four tone engines with their editors, polyphonic Solo Synth (up to eight voices, MPE), eight-part multi mode, Performances, the step sequencer, the measured system reverb, the instrument's front panel, and saving (WRITE to user slots, and the instrument's own file kinds on an SD card image).
+- Not yet checked against a real XW-P1: files saved here have not been loaded on the instrument, nor the other way round.
+- The desktop app and every plugin instance share one SD card image, and nothing yet stops two of them writing it at the same moment: do Card Save from one at a time. Saving from inside the plugin uses the same code as the app but has not been tested separately.
+- Linux only, built from source. The plugin is developed against Bitwig Studio; other hosts are untried.
+- Only the firmware of updater 1.11 is accepted.
+
+## Requirements
+
+A Linux desktop with PipeWire, and these packages. The build itself needs Rust 1.89 or newer; if your distribution's is older, install it from [rustup.rs](https://rustup.rs).
+
+| | Debian / Ubuntu | Arch | Fedora |
+| --- | --- | --- | --- |
+| Build | `build-essential pkg-config libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev`, and Rust from rustup (the packaged one is too old in 24.04) | `base-devel rust alsa-lib dbus webkit2gtk-4.1` | `cargo gcc pkgconf-pkg-config alsa-lib-devel dbus-devel webkit2gtk4.1-devel` |
+| Run | `pipewire-bin zenity xdg-utils` | `pipewire-audio zenity xdg-utils` | `pipewire-utils zenity xdg-utils` |
+| Plugin, in addition | `libx11-xcb-dev` | nothing | `libX11-devel` |
+
+`tools/install_app.sh --check` (add `--plugin` if you want it) says what is missing without building anything. The lists were checked by building in bare Ubuntu 24.04 and Fedora containers; the app is developed and used on Arch.
+
+## Install
 
 ```sh
-~/.local/bin/xwp1 setup '/path/to/XW-P1 Updater for Win-1_11-131218.zip'
-~/.local/bin/xwp1 check
+tools/install_app.sh '/path/to/XW-P1 Updater for Win-1_11-131218.zip'
 ```
 
-Only the tested XW-P1 1.11 image is supported. Setup stores a private copy under `${XDG_DATA_HOME:-~/.local/share}/xwp1/firmware/` and generates preset and tone names plus editor data under `xwp1/assets/`. It can take several minutes. Repeating setup with the same updater leaves an already valid install alone. The updater ZIP stays where you put it. The emulator's `user.bin` and plugin project state survive setup.
+That is the whole installation: it checks the requirements, builds (three to five minutes the first time), installs the app for your user, and imports the firmware (about three minutes: it starts the instrument and reads every tone name from it). Then open **XW-P1 Emulator** from the application menu.
 
-`XWP1_DATA_HOME` overrides the user data directory. `XWP1_PANEL_DIR` overrides static panel files for development. `--image`, `--panel-dir`, and `--reverb` remain available on `xwp1-rt` for development.
+- Either of Casio's 1.11 updater ZIPs works (Windows or Mac), and so does an extracted `p1-update.bin`. Only the image inside is read; the updater program is never run and nothing is sent to a physical instrument. The ZIP stays where it is.
+- Without the file argument the script only installs, and the app asks for the updater on its first start. `xwp1 setup UPDATER.zip` does the same from a terminal, and `xwp1 check` reports whether an import is complete.
+- Add `--plugin` to build the VST3 and CLAP plugin too and copy it to `~/.vst3` and `~/.clap`. It uses the same imported firmware.
+- Optional: `xwp1 waves` draws the picture of every wave for the editor and builds the index used when morphing between different samples (about four minutes; it can be interrupted and resumed, and `xwp1 waves 2` uses two workers instead of four). The editor works without them.
 
-The editor works without the optional wave pictures. To build them locally, run `~/.local/bin/xwp1 waves` after setup. This also builds the wave register index used to blend oscillator samples when morphing between A and B snapshots. It reports progress and keeps completed waves as checkpoints; Ctrl-C stops it, and the same command resumes. Pass a worker count such as `xwp1 waves 2` to limit memory use. The installer includes measured reverb responses from the instrument. Firmware import does not generate those recordings.
+Where things go:
 
-The static editor tables in `xwp1/assets/` contain SysEx addresses, value types, ranges, labels, wave names, and reviewed address maps. The control definitions were compiled from the XW-P1 MIDI implementation document, franky's CTRLR panel, and checks on the instrument. Factory preset and PCM tone names are read from the user's firmware during setup and are not in these tables.
+| | |
+| --- | --- |
+| `~/.local/share/xwp1-app/` | the app: binaries and editor pages; also the editor's own storage (saved macro and morph sets) |
+| `~/.local/bin/xwp1`, `xwp1-app` | links to the player and the app |
+| `~/.local/share/xwp1/` | your imported firmware, the data built from it, the reverb responses |
+| `~/.config/xwp1/` | your user memory (`user.bin`), SD card image (`card.img`) and settings |
 
-To remove the installed app, run `tools/install_app.sh --remove`. This leaves the imported firmware and user memory in place.
+`tools/install_app.sh --remove` removes the binaries, editor pages, menu entry and plugin, and nothing you made or imported. Run the install script again after updating the source; an import that is already complete is left as it is.
 
-## Plugin
+How to play it, edit sounds and save them is in the [user guide](docs/USER_GUIDE.md).
 
-The VST3 and CLAP plugin can be built with `xwp1-plugin/build.sh`. It uses the same imported firmware and generated editor files as the desktop app. If it opens before setup, its editor has a **Set up firmware** button. Reopen the plugin instance after setup completes.
+## Development
 
-The plugin build needs Rust and the native audio and graphics development libraries. The VST3 binding used by NIH-plug is GPLv3; this project is GPL-3.0-or-later.
+`tools/test.sh` runs the tests that need neither firmware nor an audio device: the Rust tests of the core, app and plugin (including the real HTTP / WebSocket server), a syntax check of every editor script, and the editor's tests under Node.js (one of them in headless Chromium when it is installed, skipped otherwise). The core has slower tests marked `#[ignore]` that need an imported firmware.
 
-## Tests
+- `xwp1/` is the emulator core and the player `xwp1-rt` (`xwp1 --help` lists its options), `xwp1-app/` the desktop window, `xwp1-plugin/` the plugin, `xwp1/panel/` the editor (plain JavaScript, no build step).
+- To run from the source tree: `XWP1_PANEL_DIR=xwp1/panel xwp1/target/release/xwp1-rt`. `XWP1_DATA_HOME` moves the data directory; `--image`, `--panel-dir` and `--reverb` name single pieces.
+- The CPU is an ARM7TDMI interpreter (`xwp1/src/arm.rs`). `cargo build --release --features unicorn` adds Unicorn as a reference core (`--cpu unicorn`) and builds `xwp1-lockstep`, which runs both side by side and compares them after every sample; that needs cmake and libclang, and nothing else uses it.
+- The tables in `xwp1/assets/` are the instrument's control definitions (SysEx addresses, value types, ranges, labels, wave names), compiled from Casio's MIDI implementation document, franky's CTRLR panel, and checks on the instrument. Preset and tone names are not in them: they are read from your firmware during setup.
+- `tools/release.py` exports the files listed in `release-manifest.txt` as a source release.
 
-Run `tools/test.sh` from any directory. It runs the firmware-independent Rust tests for the core and plugin, builds the app's test target, checks every panel script's syntax, and runs the panel tests with Node.js. The Rust integration tests start the real HTTP/WebSocket server and check asset delivery, rejected paths, MIDI routing, audio subscriptions, status, and reconnection. When Chromium is installed, a browser test loads the real panel against a small protocol fixture and checks startup, incoming status and volume, outgoing volume, and keyboard MIDI. The browser test reports a skip if Chromium is unavailable. These tests need Rust, Node.js, and the native libraries used to build the app and plugin; no firmware or audio device is required.
+## License
 
-The core also has slower firmware-dependent development tests marked `#[ignore]`. They are outside the firmware-independent release suite and may need local test fixtures.
-
-The desktop app requires GTK/WebKitGTK and the player uses PipeWire and ALSA MIDI. A Linux desktop with `zenity` provides the first-launch file chooser. For headless setup, use the CLI command above.
-
-## Release source and license
-
-The 1.0 source release is Linux only. It contains no firmware, updater, generated preset lists, wave samples, user data, or hardware recordings other than the measured reverb responses. Use `python3 tools/release.py --check` to verify the exact public file list, then `python3 tools/release.py` to create a separate public source tree and tarball under `dist/`. The archive has a SHA-256 sidecar; the tree includes hashes for every reviewed source file. This tree is meant to be committed to a public repository with its own history, separate from private development work.
-
-The project code is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE). Bundled fonts retain the OFL licenses in `xwp1/panel/fonts/`. The Casio XW-P1 firmware is not distributed and must be supplied by the user.
+GPL-3.0-or-later; see [LICENSE](LICENSE). (The VST3 binding used by NIH-plug is GPLv3.) The bundled fonts keep their OFL licenses in `xwp1/panel/fonts/`. The measured reverb responses in `data/reverb/` are recordings of the instrument made for this project. The Casio XW-P1 firmware is not distributed and must be supplied by the user.

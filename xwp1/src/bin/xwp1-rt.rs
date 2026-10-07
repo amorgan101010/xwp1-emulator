@@ -13,7 +13,7 @@
 //! usage: xwp1-rt [--image FILE] [--syx FILE] [--program N] [--hex | --drawbar] [--keys] [--node NAME]
 //!                [--voices N] [--bend SEMITONES] [--block SAMPLES] [--script FILE --wav FILE]
 //!                [--no-connect] [--latency MS] [--gain G] [--bench SECONDS] [--cpu native|unicorn] [--exact] [--dry]
-//!                [--reverb DIR] [--no-user]
+//!                [--reverb DIR] [--no-user] [--card FILE | --no-card]
 //!                [--remote PORT | --no-remote] [--panel-dir DIR]
 use std::io::Write;
 use std::os::fd::AsRawFd;
@@ -37,6 +37,8 @@ struct Args {
     syx: Option<PathBuf>,
     program: u8,
     no_user: bool, // do not keep the instrument's user memory in ~/.config/xwp1/user.bin
+    card: Option<PathBuf>, // the SD card's image instead of ~/.config/xwp1/card.img
+    no_card: bool, // nothing in the card slot
     keys: bool, // notes on channel 1 play the instrument's own keyboard (zones, arpeggio, phrases) instead of MIDI IN
     bank: u8, // bank select MSB: Solo Synth, 97 = Hex Layer (--hex), 96 = Drawbar Organ (--drawbar)
     node: String,
@@ -59,12 +61,12 @@ struct Args {
 }
 
 fn args() -> Args {
-    let mut a = Args { image: xwp1::setup::image_path(), syx: None, program: 0, keys: false, no_user: false, bank: SOLO_SYNTH_BANK,
+    let mut a = Args { image: xwp1::setup::image_path(), syx: None, program: 0, keys: false, no_user: false, card: None, no_card: false, bank: SOLO_SYNTH_BANK,
                        node: "xwp1".into(), connect: true, latency_ms: 20, gain: 1.0, input_gain: 1.0, remote: Some(8800), panel_dir: xwp1::setup::panel_dir(), bench: None, cpu: CpuKind::Native, fast: true, dry: false,
                        reverb: xwp1::setup::data_root().join("reverb"), voices: None, bend: None, block: None, script: None, wav: None };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
-        let mut value = || it.next().unwrap_or_else(|| panic!("{flag} needs a value"));
+        let mut value = || it.next().unwrap_or_else(|| { eprintln!("{flag} needs a value"); std::process::exit(2) });
         match flag.as_str() {
             "--image" => a.image = value().into(),
             "--syx" => a.syx = Some(value().into()),
@@ -83,11 +85,13 @@ fn args() -> Args {
             "--cpu" => a.cpu = match value().as_str() {
                 "native" => CpuKind::Native,
                 "unicorn" => CpuKind::Unicorn,
-                other => panic!("--cpu {other}: native or unicorn"),
+                other => { eprintln!("--cpu {other}: native or unicorn"); std::process::exit(2) }
             },
             "--exact" => a.fast = false,
             "--dry" => a.dry = true,
             "--no-user" => a.no_user = true,
+            "--card" => a.card = Some(value().into()),
+            "--no-card" => a.no_card = true,
             "--reverb" => a.reverb = value().into(),
             "--voices" => a.voices = Some(value().parse().expect("--voices")),
             "--bend" => a.bend = Some(value().parse().expect("--bend")),
@@ -95,7 +99,7 @@ fn args() -> Args {
             "--script" => a.script = Some(value().into()),
             "--wav" => a.wav = Some(value().into()),
             "--bench" => a.bench = Some(value().parse().expect("--bench")),
-            _ => panic!("unknown option {flag}"),
+            _ => { eprintln!("unknown option {flag} (see xwp1 --help)"); std::process::exit(2) }
         }
     }
     if a.bank != SOLO_SYNTH_BANK {
@@ -255,9 +259,44 @@ impl Controllers {
     }
 }
 
+const HELP: &str = "\
+XW-P1 Emulator: the player (audio to PipeWire, MIDI on the ALSA sequencer, the editor on a local web port)
+
+  xwp1 setup UPDATER.zip   import the XW-P1 1.11 firmware from Casio's updater ZIP (or its p1-update.bin)
+  xwp1 check               say whether the firmware is imported and its data complete
+  xwp1 waves [JOBS]        build the optional wave pictures (resumes where it stopped)
+  xwp1 [OPTIONS]           play; the editor is at http://localhost:8800/
+
+  --remote PORT | --no-remote   the editor's port (8800), or no editor
+  --node NAME                   PipeWire node name (xwp1)
+  --no-connect                  leave the node uncabled instead of connecting it to the default output
+  --latency MS                  output latency (20)
+  --gain G                      output gain (1.0)
+  --voices N                    Solo Synth voices, 1..8 (as last set in the editor)
+  --bend SEMITONES              bend range (as last set in the editor)
+  --program N  --hex | --drawbar   the tone to start on: Solo Synth preset N, or a Hex Layer / Drawbar Organ one
+  --keys                        channel-1 notes play the instrument's keys (zones, arpeggio, phrases)
+  --dry                         no system reverb
+  --no-user                     do not read or keep the user memory (~/.config/xwp1/user.bin)
+  --card FILE | --no-card       another SD card image, or none (~/.config/xwp1/card.img)
+  --script FILE --wav FILE      render timed MIDI (\"SECONDS HEX ...\" per line) to a file instead of playing
+  --syx FILE                    send a SysEx file after start
+  --bench SECONDS               time the emulation and exit
+  --image FILE  --panel-dir DIR  --reverb DIR   run from a source tree instead of the installed data
+  --version
+";
+
 fn main() {
     let mut setup_args = std::env::args().skip(1);
     match setup_args.next().as_deref() {
+        Some("--help" | "-h" | "help") => {
+            print!("{HELP}");
+            return;
+        }
+        Some("--version" | "-V") => {
+            println!("xwp1 {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
         Some("setup") => {
             let source = setup_args.next().unwrap_or_else(|| { eprintln!("usage: xwp1 setup UPDATER.zip|p1-update.bin"); std::process::exit(2) });
             if setup_args.next().is_some() { eprintln!("setup accepts one file"); std::process::exit(2); }
@@ -295,6 +334,14 @@ fn main() {
                           host_user: None,
                           user: (!a.no_user && a.bench.is_none() && a.script.is_none()).then(|| Poly::file().with_file_name("user.bin")) };
     let mut engine = Engine::start(&config, wanted);
+    // the SD card: an image file the firmware reads and writes as it does a card (made, formatted, when it is not
+    // there); like the user memory, a render or a benchmark runs without unless it names one
+    if !a.no_card {
+        let default = (a.bench.is_none() && a.script.is_none()).then(|| Poly::file().with_file_name("card.img"));
+        if let Some(path) = a.card.clone().or(default).and_then(|path| xwp1::card::ready(&path)) {
+            engine.card(Some(path));
+        }
+    }
     if wanted.multitimbral {
         eprintln!("8 independent MIDI parts, {} samples at a time", engine.block);
     } else if wanted.voices > 1 {
@@ -445,7 +492,11 @@ fn main() {
     // never notices on its own while its node is uncabled).
     let with_parent = || unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) }.min(0).eq(&0).then_some(()).ok_or_else(std::io::Error::last_os_error);
     unsafe { cmd.pre_exec(with_parent) };
-    let mut player = cmd.arg("-").stdin(Stdio::piped()).spawn().expect("pw-cat");
+    let no_pw_cat = |e: std::io::Error| -> ! {
+        eprintln!("pw-cat could not be started ({e}): it is the audio output and comes with PipeWire's tools (see README, Requirements)");
+        std::process::exit(1)
+    };
+    let mut player = cmd.arg("-").stdin(Stdio::piped()).spawn().unwrap_or_else(|e| no_pw_cat(e));
     let mut pipe = player.stdin.take().unwrap();
     // pw-cat reads nothing while its node is uncabled. Keep the pipe short
     // (it would otherwise hold 190 ms of stale audio from then on) and
@@ -472,7 +523,7 @@ fn main() {
     let mut recorder = recorder.args(["--record", "--raw", "--format", "f32", "--channels", "1", "--rate",
                                                     &format!("{rate}"), "--latency",
                                                     &format!("{}ms", a.latency_ms), "--target", "0", "-P", &in_props, "-"])
-                                             .stdout(Stdio::piped()).spawn().expect("pw-cat --record");
+                                             .stdout(Stdio::piped()).spawn().unwrap_or_else(|e| no_pw_cat(e));
     let mut capture = recorder.stdout.take().unwrap();
     std::thread::spawn(move || {
         use std::io::Read;

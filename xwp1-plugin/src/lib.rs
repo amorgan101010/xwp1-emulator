@@ -225,6 +225,10 @@ fn engine(shared: Arc<Shared>, saved: Saved, mut events: rtrb::Consumer<Event>, 
                           host_user: Some(miniz_oxide::inflate::decompress_to_vec(&start.user).ok().filter(|d| !d.is_empty())) };
     let mut wanted = start.poly();
     let mut engine = Engine::start(&config, wanted);
+    // the SD card is the player's: one image for the app and every plugin instance (~/.config/xwp1/card.img)
+    if let Some(path) = xwp1::card::ready(&Poly::file().with_file_name("card.img")) {
+        engine.card(Some(path));
+    }
 
     let rate = SAMPLE_RATE.round();
     shared.voices.store(engine.voices.len() as u32, Ordering::Relaxed);
