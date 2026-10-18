@@ -74,14 +74,11 @@ defined center. Switches and labeled buttons respond to a click. The panel
 reads values from the emulator after a sound change; wait for the loading bar
 to finish before editing.
 
-### Solo macros and morphing
+### Solo macros
 
 The **Macros** strip at the top of Solo moves several tone parameters with one
-control. The tone keeps the resulting parameter values. Use **Store A** and
-**Store B** to capture two states, then move **Morph** between them. The nearby
-**Save** and **Load** controls keep a named morph and macro configuration in the
-app's browser storage. These configurations are separate from the
-instrument's user memory. **Undo** reverses the most recent macro edit.
+control. The tone keeps the resulting parameter values. **Undo** reverses the
+most recent macro edit. Morph is temporarily unavailable in this release.
 
 The macro strip can be folded with its **Macros** heading. **Learn** lets a
 MIDI controller operate a macro: select the macro, then move a controller.
@@ -137,8 +134,7 @@ with `--no-card` for an empty slot, or `--card FILE` for another image (the
 whole card as a file; one read from a real card has not been tried).
 
 Wave pictures are optional. After setup, run `~/.local/bin/xwp1 waves` to
-build them from your imported firmware. This also builds the wave index used
-for Solo morphing between different samples. The command reports progress;
+build them from your imported firmware. The command reports progress;
 you can stop it with Ctrl-C and run it again to resume. `xwp1 waves 2` limits
 the work to two workers. The measured reverb responses are already installed
 with the desktop app.

@@ -43,7 +43,11 @@ const macroLfoShape = setting('macroLfo.shape', 0, 6);
 const macroLfoRate = setting('macroLfo.rate', 45, 100);
 const macroLfoDepth = setting('macroLfo.depth', 100, 100);
 const macroLfoCenter = setting('macroLfo.center', 50, 100);
-macroLfoTarget.name = 'Macro LFO destination. Morph requires both A and B snapshots.';
+macroLfoTarget.name = 'Macro LFO destination';
+// Morph is withheld from this release, including previously saved LFO selections.
+if (now(macroLfoTarget) === 1) macroLfoTarget.set(0);
+const setMacroLfoTarget = macroLfoTarget.set;
+macroLfoTarget.set = v => setMacroLfoTarget(v === 1 ? 0 : v);
 macroLfoMode.name = 'Hold samples the free-running wave separately for every note. Free continues running; Trig, One and Half restart for each note.';
 macroLfoShape.name = 'Macro LFO waveform';
 macroLfoRate.name = 'Macro LFO speed in hertz';
@@ -789,11 +793,8 @@ function build() {
         part('lfo', 'LFO', wobbles.map(([ref, name]) => k(ref, name)),
           col(seg(lfo, ['LFO 1', 'LFO 2'], v => { lfo.set(v); aimWobbles(); }),
               pick(tempo, DIVISIONS, { label: 'Clock', number: false, set: tempo.set }))),
-        part('fx morph', 'Morph', col(el('div', { class: 'morph-actions' },
-            el('div', { class: 'fields morph-snapshots' }, endButtons), el('div', { class: 'fields morph-target' }, targetButtons)), editHint, configWrap),
-          k(morph, 'Morph', { size: 'big', text: v => v == null ? '–' : v === 0 ? 'A' : v === 100 ? 'B' : v + '%' })),
         part('macro-lfo', 'Macro LFO',
-          col(pick(macroLfoTarget, LFO_TARGETS, { label: 'Destination', set: macroLfoTarget.set }),
+          col(pick(macroLfoTarget, LFO_TARGETS, { label: 'Destination', set: macroLfoTarget.set, omit: [1] }),
               pick(macroLfoMode, ['Hold', 'Free', 'Trig', 'One', 'Half'], { label: 'Mode', set: macroLfoMode.set }),
               pick(macroLfoShape, ['Sine', 'Triangle', 'Saw', 'Ramp', 'Exp', 'Square', 'Random'], { label: 'Wave', set: macroLfoShape.set })),
           knob(macroLfoRate, { label: 'Rate', size: 'sm', set: macroLfoRate.set, text: () => rateHz().toFixed(2) + ' Hz' }),

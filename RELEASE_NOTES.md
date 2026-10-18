@@ -1,4 +1,10 @@
-# XW-P1 Emulator 0.9.0
+# XW-P1 Emulator 0.9.1
+
+This pre-release removes the unreliable Morph controls from the public panel,
+including Morph as a Macro LFO destination. Previously saved browser data is
+preserved for a later fix.
+
+## 0.9.0 changes
 
 A pre-release, for Linux, built from source. It replaces the 1.0.0 source
 snapshot, which was withdrawn: that one could not save, and was harder to

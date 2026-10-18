@@ -679,7 +679,7 @@ function chooser(anchor, labels, current, choose, opts = {}) {
   const fill = () => {
     const q = search ? search.value.trim().toLowerCase() : '';
     const hits = [];
-    for (let i = 0; i < labels.length && hits.length <= LIMIT; i++) if (!q || labels[i].toLowerCase().includes(q) || String(i + (opts.from ?? 0)).startsWith(q)) hits.push(i);
+    for (let i = 0; i < labels.length && hits.length <= LIMIT; i++) if (!opts.omit?.includes(i) && (!q || labels[i].toLowerCase().includes(q) || String(i + (opts.from ?? 0)).startsWith(q))) hits.push(i);
     list.replaceChildren(...hits.slice(0, LIMIT).map(i => {
       const item = el('button', { class: 'item' + (i === current ? ' sel' : '') }, el('small', { text: opts.number === false ? '' : i + (opts.from ?? 0) }), labels[i]);
       item.addEventListener('click', () => { choose(i); if (!opts.keep) closePopover(); else { current = i; fill(); } });

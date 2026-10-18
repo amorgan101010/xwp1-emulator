@@ -6,13 +6,14 @@ An emulator of the Casio XW-P1 synthesizer for Linux: a desktop app with a full 
 
 This is an independent project, unaffiliated with and not endorsed or supported by Casio Computer Co., Ltd.
 
-## Status: 0.9, a pre-release
+## Status: 0.9.1, a pre-release
 
 - Works: all four tone engines with their editors, polyphonic Solo Synth (up to eight voices, MPE), eight-part multi mode, Performances, the step sequencer, the measured system reverb, the instrument's front panel, and saving (WRITE to user slots, and the instrument's own file kinds on an SD card image).
 - Not yet checked against a real XW-P1: files saved here have not been loaded on the instrument, nor the other way round.
 - The desktop app and every plugin instance share one SD card image, and nothing yet stops two of them writing it at the same moment: do Card Save from one at a time. Saving from inside the plugin uses the same code as the app but has not been tested separately.
 - Linux only, built from source. The plugin is developed against Bitwig Studio; other hosts are untried.
 - Only the firmware of updater 1.11 is accepted.
+- Morph is temporarily unavailable in the public panel.
 
 ## Requirements
 
@@ -37,13 +38,13 @@ That is the whole installation: it checks the requirements, builds (three to fiv
 - Either of Casio's 1.11 updater ZIPs works (Windows or Mac), and so does an extracted `p1-update.bin`. Only the image inside is read; the updater program is never run and nothing is sent to a physical instrument. The ZIP stays where it is.
 - Without the file argument the script only installs, and the app asks for the updater on its first start. `xwp1 setup UPDATER.zip` does the same from a terminal, and `xwp1 check` reports whether an import is complete.
 - Add `--plugin` to build the VST3 and CLAP plugin too and copy it to `~/.vst3` and `~/.clap`. It uses the same imported firmware.
-- Optional: `xwp1 waves` draws the picture of every wave for the editor and builds the index used when morphing between different samples (about four minutes; it can be interrupted and resumed, and `xwp1 waves 2` uses two workers instead of four). The editor works without them.
+- Optional: `xwp1 waves` draws the picture of every wave for the editor (about four minutes; it can be interrupted and resumed, and `xwp1 waves 2` uses two workers instead of four). The editor works without them.
 
 Where things go:
 
 | | |
 | --- | --- |
-| `~/.local/share/xwp1-app/` | the app: binaries and editor pages; also the editor's own storage (saved macro and morph sets) |
+| `~/.local/share/xwp1-app/` | the app: binaries and editor pages; also the editor's own storage for macro settings |
 | `~/.local/bin/xwp1`, `xwp1-app` | links to the player and the app |
 | `~/.local/share/xwp1/` | your imported firmware, the data built from it, the reverb responses |
 | `~/.config/xwp1/` | your user memory (`user.bin`), SD card image (`card.img`) and settings |

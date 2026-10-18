@@ -3085,7 +3085,7 @@ dependencies = [
 
 [[package]]
 name = "xwp1"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "fatfs",
  "libc",
@@ -3100,7 +3100,7 @@ dependencies = [
 
 [[package]]
 name = "xwp1-app"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libc",
  "tao",
